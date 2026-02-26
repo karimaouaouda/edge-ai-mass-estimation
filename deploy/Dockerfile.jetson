@@ -1,0 +1,23 @@
+# Base image: NVIDIA L4T with PyTorch + TensorRT pre-installed
+# Choose the right tag for your JetPack version
+FROM nvcr.io/nvidia/l4t-pytorch:r35.2.1-pth2.0-py3
+
+WORKDIR /app
+
+# System deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-opencv && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml .
+COPY src/ src/
+
+# Install without depth extras (transformers is heavy — use ONNX/TRT instead)
+RUN pip3 install --no-cache-dir -e ".[data,eval]"
+
+COPY configs/ configs/
+COPY scripts/ scripts/
+COPY models/ models/
+
+ENTRYPOINT ["python3", "-m", "edge_ai_mass.cli"]
+CMD ["--help"]

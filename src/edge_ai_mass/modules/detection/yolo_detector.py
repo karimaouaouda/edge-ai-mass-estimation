@@ -1,0 +1,78 @@
+"""YOLOv8 object detector with instance segmentation support.
+
+Wraps Ultralytics YOLOv8 and supports both PyTorch and TensorRT engines.
+Returns ``Detection`` objects consumed by the pipeline.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import numpy as np
+
+from edge_ai_mass.modules.base import BaseModule
+from edge_ai_mass.pipeline.pipeline import Detection
+
+logger = logging.getLogger(__name__)
+
+# Default waste-category mapping (aligned with TACO super-categories)
+DEFAULT_CLASSES = {
+    0: "plastic",
+    1: "glass",
+    2: "metal",
+    3: "paper",
+    4: "cardboard",
+    5: "organic",
+    6: "textile",
+    7: "wood",
+    8: "other",
+}
+
+
+class YOLODetector(BaseModule):
+    """YOLOv8-nano / YOLOv8-seg detector for waste objects."""
+
+    def __init__(self, config: dict[str, Any]) -> None:
+        super().__init__(config)
+        self.model_path: str = config.get("model_path", "yolov8n-seg.pt")
+        self.conf_threshold: float = config.get("conf_threshold", 0.25)
+        self.iou_threshold: float = config.get("iou_threshold", 0.45)
+        self.img_size: int = config.get("img_size", 640)
+        self.class_map: dict[int, str] = config.get("class_map", DEFAULT_CLASSES)
+        self._model: Any = None
+
+    def load(self) -> None:
+        from ultralytics import YOLO
+
+        logger.info("Loading YOLO model from %s", self.model_path)
+        self._model = YOLO(self.model_path)
+        self._is_loaded = True
+
+    def _forward(self, image: np.ndarray, **kwargs: Any) -> list[Detection]:
+        results = self._model.predict(
+            image,
+            conf=self.conf_threshold,
+            iou=self.iou_threshold,
+            imgsz=self.img_size,
+            verbose=False,
+        )
+        detections: list[Detection] = []
+        for r in results:
+            boxes = r.boxes
+            masks = r.masks
+            for i, box in enumerate(boxes):
+                cls_id = int(box.cls[0])
+                mask = None
+                if masks is not None:
+                    mask = masks.data[i].cpu().numpy().astype(np.uint8)
+                detections.append(
+                    Detection(
+                        bbox=box.xyxy[0].cpu().numpy(),
+                        mask=mask,
+                        class_id=cls_id,
+                        class_name=self.class_map.get(cls_id, f"class_{cls_id}"),
+                        confidence=float(box.conf[0]),
+                    )
+                )
+        return detections

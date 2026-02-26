@@ -1,0 +1,54 @@
+# Default pipeline configuration
+# Each stage has a primary model and an optional fallback.
+# The pipeline runs: detection → depth → mass (cascade).
+
+stages:
+  detection:
+    latency_budget_ms: 150
+    primary:
+      class: edge_ai_mass.modules.detection.yolo_detector.YOLODetector
+      params:
+        model_path: models/weights/yolov8n-seg.pt
+        conf_threshold: 0.25
+        iou_threshold: 0.45
+        img_size: 640
+    fallback:
+      class: edge_ai_mass.modules.detection.mobilenet_detector.MobileNetDetector
+      params:
+        model_path: null  # uses pretrained torchvision weights
+        conf_threshold: 0.3
+
+  depth:
+    latency_budget_ms: 100
+    primary:
+      class: edge_ai_mass.modules.depth.depth_anything.DepthAnythingModule
+      params:
+        model_name: depth-anything/Depth-Anything-V2-Small-hf
+        input_size: 384
+    fallback:
+      class: edge_ai_mass.modules.depth.depth_anything.MiDaSDepthModule
+      params:
+        model_type: MiDaS_small
+
+  mass:
+    latency_budget_ms: 50
+    primary:
+      class: edge_ai_mass.modules.mass.regression_estimator.RegressionMassEstimator
+      params:
+        checkpoint_path: models/weights/mass_regression.pt
+        input_dim: 32
+        hidden_dim: 64
+        num_classes: 9
+    fallback:
+      class: edge_ai_mass.modules.mass.density_estimator.DensityMassEstimator
+      params:
+        densities:
+          plastic: 40.0
+          glass: 300.0
+          metal: 160.0
+          paper: 90.0
+          cardboard: 60.0
+          organic: 500.0
+          textile: 120.0
+          wood: 250.0
+          other: 100.0
