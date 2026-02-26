@@ -1,0 +1,29 @@
+# Mass regression head training configuration
+
+model:
+  input_dim: 32
+  hidden_dim: 64
+  num_classes: 9
+
+training:
+  epochs: 200
+  batch_size: 64
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  loss: huber         # robust to outliers
+  huber_delta: 0.5
+  scheduler: cosine
+  warmup_epochs: 5
+
+data:
+  train_csv: data/splits/mass_train.csv
+  val_csv: data/splits/mass_val.csv
+  test_csv: data/splits/mass_test.csv
+  # Each row: bbox_w, bbox_h, area, mask_area, mask_ratio,
+  #           depth_mean, depth_median, depth_std, depth_min, depth_max,
+  #           class_id, mass_kg
+
+evaluation:
+  metrics: [rmse, mape, r2]
+  save_best: true
+  checkpoint_dir: models/weights/

@@ -1,0 +1,24 @@
+# NVIDIA Jetson Nano hardware profile
+
+device:
+  name: jetson_nano
+  gpu: Maxwell 128-core
+  ram_gb: 4
+  power_mode: 5W  # or 10W (MAXN)
+  cuda_compute: "5.3"
+
+tensorrt:
+  precision: fp16        # fp32, fp16, int8
+  workspace_mb: 1024
+  max_batch_size: 1
+  calibration_cache: models/weights/calibration.cache
+
+camera:
+  type: usb
+  resolution: [640, 480]
+  fps: 30
+  device_id: 0
+
+performance_targets:
+  min_fps: 5
+  max_latency_ms: 200  # full pipeline

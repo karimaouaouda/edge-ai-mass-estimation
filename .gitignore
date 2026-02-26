@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data (large files tracked separately or via DVC)
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Model weights (download via scripts)
+models/weights/*.pt
+models/weights/*.onnx
+models/weights/*.engine
+models/weights/*.trt
+!models/weights/.gitkeep
+
+# Logs and outputs
+runs/
+outputs/
+logs/
+*.log
+wandb/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Calibration images (keep configs only)
+data/calibration/images/
+!data/calibration/.gitkeep
+
+# Environment
+.env

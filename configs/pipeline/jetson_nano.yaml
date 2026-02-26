@@ -1,0 +1,36 @@
+# Jetson Nano optimised configuration
+# Tighter latency budgets, smaller models, TensorRT engines.
+
+stages:
+  detection:
+    latency_budget_ms: 120
+    primary:
+      class: edge_ai_mass.modules.detection.yolo_detector.YOLODetector
+      params:
+        model_path: models/weights/yolov8n-seg.engine  # TensorRT FP16
+        conf_threshold: 0.30
+        iou_threshold: 0.45
+        img_size: 480  # smaller for speed
+    fallback:
+      class: edge_ai_mass.modules.detection.mobilenet_detector.MobileNetDetector
+      params:
+        conf_threshold: 0.35
+
+  depth:
+    latency_budget_ms: 80
+    primary:
+      class: edge_ai_mass.modules.depth.depth_anything.DepthAnythingModule
+      params:
+        model_name: depth-anything/Depth-Anything-V2-Small-hf
+        input_size: 256  # smaller input for Jetson
+    fallback:
+      class: edge_ai_mass.modules.depth.depth_anything.MiDaSDepthModule
+      params:
+        model_type: MiDaS_small
+
+  mass:
+    latency_budget_ms: 30
+    primary:
+      class: edge_ai_mass.modules.mass.density_estimator.DensityMassEstimator
+      params: {}
+    # No regression fallback on Jetson — density is fast enough
