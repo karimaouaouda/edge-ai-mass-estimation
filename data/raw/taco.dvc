@@ -1,0 +1,6 @@
+outs:
+- md5: 83d08f2fabd2fe2c012e90027f76d0b8.dir
+  size: 2630208109
+  nfiles: 1501
+  hash: md5
+  path: taco
