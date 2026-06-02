@@ -25,6 +25,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+import cv2
 import numpy as np
 
 from edge_ai_mass.modules.base import BaseModule, ModuleResult
@@ -158,6 +159,7 @@ class Pipeline:
 
         # 3. Per-object mass estimation -----------------------------------
         mass_stage = self.stages["mass"]
+        mass_latency_ms = 0.0
         for det in detections:
             obj = ObjectEstimate(detection=det)
 
@@ -179,8 +181,9 @@ class Pipeline:
             obj.material = mass_result.data.get("material")
             obj.mass_method = mass_result.metadata.get("method", "unknown")
             result.objects.append(obj)
+            mass_latency_ms += mass_result.latency_ms
 
-        latencies["mass"] = mass_stage.primary.predict.__func__  # placeholder
+        latencies["mass"] = mass_latency_ms
         result.latency_ms = latencies
         result.frame_time_ms = (time.perf_counter() - t0) * 1000
         return result
@@ -199,7 +202,8 @@ def _depth_stats_for_detection(
 ) -> dict[str, float]:
     """Compute mean / median / std depth inside the object region."""
     if det.mask is not None:
-        pixels = depth_map[det.mask > 0]
+        mask = _mask_for_depth_map(depth_map, det.mask)
+        pixels = depth_map[mask > 0]
     else:
         x1, y1, x2, y2 = det.bbox.astype(int)
         pixels = depth_map[y1:y2, x1:x2].ravel()
@@ -214,3 +218,16 @@ def _depth_stats_for_detection(
         "min": float(np.min(pixels)),
         "max": float(np.max(pixels)),
     }
+
+
+def _mask_for_depth_map(depth_map: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Resize a detection mask so it can be applied to the depth map safely."""
+    if mask.shape == depth_map.shape:
+        return mask
+
+    if mask.ndim != 2:
+        raise ValueError(f"Expected a 2-D mask, got shape {mask.shape}")
+
+    depth_h, depth_w = depth_map.shape[:2]
+    resized = cv2.resize(mask.astype(np.uint8), (depth_w, depth_h), interpolation=cv2.INTER_NEAREST)
+    return resized.astype(mask.dtype, copy=False)

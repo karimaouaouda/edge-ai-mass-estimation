@@ -89,12 +89,17 @@ def _cmd_infer(args: argparse.Namespace) -> None:
 
     result = pipeline.run(image)
 
+    if not result.objects:
+        print("No objects detected.")
+        return
+
     for obj in result.objects:
         d = obj.detection
         print(
             f"  {d.class_name:12s}  conf={d.confidence:.2f}  "
             f"mass={obj.mass_kg:.4f} kg  method={obj.mass_method}"
         )
+
     print(f"\nTotal frame time: {result.frame_time_ms:.1f} ms")
 
     if args.output:

@@ -28,6 +28,24 @@ def test_depth_stats_with_mask():
     assert stats["std"] == 0.0
 
 
+def test_depth_stats_resizes_mask_to_depth_shape():
+    depth = np.ones((20, 20), dtype=np.float32) * 3.0
+    mask = np.zeros((10, 10), dtype=np.uint8)
+    mask[2:8, 2:8] = 1
+    det = Detection(
+        bbox=np.array([2, 2, 8, 8]),
+        mask=mask,
+        class_id=0,
+        class_name="plastic",
+        confidence=0.9,
+    )
+
+    stats = _depth_stats_for_detection(depth, det)
+
+    assert stats["mean"] == 3.0
+    assert stats["median"] == 3.0
+
+
 def test_depth_stats_bbox_only():
     depth = np.random.rand(10, 10).astype(np.float32)
     det = Detection(

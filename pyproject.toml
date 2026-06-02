@@ -48,7 +48,15 @@ eval = [
     "pandas>=2.0",
     "tensorboard>=2.14",
 ]
-all = ["edge-ai-mass[depth,dev,data,eval]"]
+mlops = [
+    "mlflow>=2.14",
+    "dvc>=3.50",
+    "pandas>=2.0",
+    "joblib>=1.3",
+    "onnx>=1.16",
+    "onnxruntime>=1.18",
+]
+all = ["edge-ai-mass[depth,dev,data,eval,mlops]"]
 
 [project.scripts]
 edge-ai-mass = "edge_ai_mass.cli:main"

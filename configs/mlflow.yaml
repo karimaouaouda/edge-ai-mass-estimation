@@ -1,0 +1,18 @@
+# Local MLflow settings for development.
+#
+# Scripts can read this file as the default experiment configuration, while CI or
+# production environments can override these values with environment variables.
+
+tracking_uri: ./mlruns
+experiment_name: edge-ai-mass
+registry_uri: ./mlruns
+
+tags:
+  project: edge-ai-mass-estimation
+  target_device: jetson_nano
+  pipeline: waste-characterization-mass-estimation
+
+artifacts:
+  log_models: true
+  log_configs: true
+  log_evaluation_reports: true

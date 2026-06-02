@@ -8,6 +8,7 @@ Returns a metric-scale depth map (H, W) in metres.
 
 from __future__ import annotations
 
+import datetime
 import logging
 from typing import Any
 
@@ -51,6 +52,11 @@ class DepthAnythingModule(BaseModule):
         pil_image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
         result = self._pipe(pil_image)
         depth = np.array(result["depth"], dtype=np.float32)
+
+        # save to specific path for debugging as depth image with model name and timestamp
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        debug_path = f"debug_depth_{self.model_name.replace('/', '_')}_{timestamp}.png"
+        cv2.imwrite(debug_path, (depth / np.max(depth) * 255).astype(np.uint8))
 
         # Resize depth back to original resolution
         if depth.shape[:2] != (h, w):
