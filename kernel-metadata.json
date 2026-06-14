@@ -1,0 +1,15 @@
+{
+  "id": "karimaouaouda/waste-segmentation-yolov26n-v0",
+  "title": "Waste Segmentation YOLOv26n v0",
+  "code_file": "notebooks/merge_taco_aquatrash_yolo26n_kaggle.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [
+    "harshpanwar/aquatrash",
+    "karimaouaouda/aquatrash-segmantations"
+  ]
+}
+
