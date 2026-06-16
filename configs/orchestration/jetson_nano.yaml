@@ -1,0 +1,106 @@
+# Jetson Nano orchestrator process configuration.
+# Run with: edge-ai-orchestrator --config configs/orchestration/jetson_nano.yaml
+
+project_root: ../..
+device_id: ${EDGE_AI_DEVICE_ID:jetson-nano}
+state_path: .edge_ai_mass/orchestrator/state.json
+cache_dir: .edge_ai_mass/orchestrator/cache
+backup_dir: .edge_ai_mass/orchestrator/backups
+
+updates:
+  # poll: GitHub only, mqtt: broker-triggered only, hybrid: both.
+  mode: hybrid
+  poll_interval_seconds: ${EDGE_AI_UPDATE_INTERVAL_SECONDS:21600}
+  run_on_start: true
+
+  github:
+    owner: ${EDGE_AI_GITHUB_OWNER:drovenai}
+    repo: ${EDGE_AI_GITHUB_REPO:edge-ai-mass-estimation}
+    token: ${GITHUB_TOKEN:}
+    release: latest
+    manifest_asset: edge-ai-update-manifest.json
+    channel: dev
+    include_prereleases: false
+
+  # Used when a release has no edge-ai-update-manifest.json asset.
+  install_plan:
+    assets:
+      - name: detection-tensorrt-engine
+        target: model
+        asset: yolov8n-seg.engine
+        destination: models/weights/yolov8n-seg.engine
+        sha256: ${EDGE_AI_DETECTION_ENGINE_SHA256:}
+        restart_app: true
+        required: false
+
+      - name: detection-yolo-weights
+        target: model
+        asset: yolo-seg-best.pt
+        destination: models/weights/yolo-seg-best.pt
+        sha256: ${EDGE_AI_DETECTION_WEIGHTS_SHA256:}
+        restart_app: true
+        required: false
+
+      - name: mass-regression-weights
+        target: model
+        asset: mass_regression.pt
+        destination: models/weights/mass_regression.pt
+        sha256: ${EDGE_AI_MASS_WEIGHTS_SHA256:}
+        restart_app: true
+        required: false
+
+      - name: jetson-pipeline-config
+        target: config
+        asset: jetson_nano.yaml
+        destination: configs/pipeline/jetson_nano.yaml
+        sha256: ${EDGE_AI_PIPELINE_CONFIG_SHA256:}
+        restart_app: true
+        required: false
+
+      - name: application-wheel
+        target: program
+        asset: edge_ai_mass.whl
+        install_command:
+          - python3
+          - -m
+          - pip
+          - install
+          - --no-deps
+          - --upgrade
+          - "{asset_path}"
+        restart_app: true
+        required: false
+
+mqtt:
+  enabled: true
+  host: ${EDGE_AI_MQTT_HOST:localhost}
+  port: ${EDGE_AI_MQTT_PORT:1883}
+  username: ${EDGE_AI_MQTT_USERNAME:}
+  password: ${EDGE_AI_MQTT_PASSWORD:}
+  tls: ${EDGE_AI_MQTT_TLS:false}
+  client_id: ${EDGE_AI_MQTT_CLIENT_ID:edge-ai-mass-jetson-nano}
+  topics:
+    - edge-ai-mass/${EDGE_AI_DEVICE_ID:jetson-nano}/updates
+    - edge-ai-mass/all/updates
+  status_topic: edge-ai-mass/${EDGE_AI_DEVICE_ID:jetson-nano}/status
+
+runtime:
+  # When true, the orchestrator starts and restarts the inference process itself.
+  # For systemd-managed deployments, keep this false and set restart_command.
+  manage_app_process: false
+  app_command:
+    - edge-ai-mass
+    - demo
+    - --config
+    - configs/pipeline/jetson_nano.yaml
+    - --camera
+    - "0"
+  restart_on_exit: true
+  restart_app_on_update: true
+  restart_command: []
+  health_check_command:
+    - python3
+    - -m
+    - py_compile
+    - src/edge_ai_mass/cli.py
+  command_timeout_seconds: 300

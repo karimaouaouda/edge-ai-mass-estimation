@@ -55,11 +55,18 @@ mlops = [
     "joblib>=1.3",
     "onnx>=1.16",
     "onnxruntime>=1.18",
+    "optuna>=4.0",
 ]
-all = ["edge-ai-mass[depth,dev,data,eval,mlops]"]
+orchestration = [
+    "kaggle>=1.6",
+    "paho-mqtt>=2.1",
+]
+all = ["edge-ai-mass[depth,dev,data,eval,mlops,orchestration]"]
 
 [project.scripts]
 edge-ai-mass = "edge_ai_mass.cli:main"
+edge-ai-orchestrator = "edge_ai_mass.orchestration.start:main"
+test-cmd = "test_cmd.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

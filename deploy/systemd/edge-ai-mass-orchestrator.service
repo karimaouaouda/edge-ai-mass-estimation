@@ -1,0 +1,16 @@
+[Unit]
+Description=Edge AI Mass Estimation Orchestrator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/edge-ai-mass-estimation
+Environment=EDGE_AI_DEVICE_ID=jetson-nano
+ExecStart=/usr/local/bin/edge-ai-orchestrator --config configs/orchestration/jetson_nano.yaml
+Restart=always
+RestartSec=10
+User=jetson
+
+[Install]
+WantedBy=multi-user.target

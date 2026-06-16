@@ -24,6 +24,8 @@ data/raw/*
 data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+!data/raw/*.dvc
+!data/processed/*.dvc
 
 # Model weights (download via scripts)
 models/weights/*.pt
@@ -51,11 +53,24 @@ Thumbs.db
 data/calibration/images/
 !data/calibration/.gitkeep
 data/raw/*
+notebooks/data/normalized
+/notebooks/yolo_ready
+/notebooks/working
+data/processed/*
 !data/raw/.gitkeep
+!data/normalized/.gitkeep
+!data/processed/.gitkeep
 !data/*.dvc
 !data/raw/*.dvc
+!data/normalized/*.dvc
+!data/processed/*.dvc
 
 # Environment
 .env
 ai_markdowns
 *.pt
+working
+artifacts
+
+release
+.edge_ai_mass/*

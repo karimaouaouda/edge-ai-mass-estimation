@@ -1,0 +1,6 @@
+outs:
+- md5: e604be58135ed1b3fb6e050975744db1.dir
+  size: 2719464615
+  nfiles: 3741
+  hash: md5
+  path: taco_aquatrash_yolo_seg
