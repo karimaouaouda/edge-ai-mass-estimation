@@ -25,6 +25,7 @@ Each stage has a **primary** model and an automatic **fallback** that triggers i
 - **TensorRT export** for optimised Jetson inference
 - **Config-driven** — swap models and tune parameters via YAML, no code changes
 - **CLI** for inference, live demo, benchmarking, and calibration
+- **Jetson orchestrator** for GitHub Release and MQTT-triggered model/app updates
 
 ## Quick Start
 
@@ -72,7 +73,12 @@ docker build -f deploy/Dockerfile.jetson -t edge-ai-mass:jetson .
 
 # Run
 docker run --runtime nvidia -it edge-ai-mass:jetson demo --camera 0
+
+# Run the update orchestrator process
+edge-ai-orchestrator --config configs/orchestration/jetson_nano.yaml
 ```
+
+See `docs/orchestrator.md` for GitHub Release manifests, Mosquitto commands, rollback, and systemd deployment.
 
 ## Project Structure
 

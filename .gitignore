@@ -71,3 +71,6 @@ ai_markdowns
 *.pt
 working
 artifacts
+
+release
+.edge_ai_mass/*

@@ -57,6 +57,18 @@ def main(argv: list[str] | None = None) -> None:
     p_cal.add_argument("--board-size", default="9,6")
     p_cal.add_argument("--square-size", type=float, default=0.025)
 
+    p_orch = sub.add_parser("orchestrator", help="Run the Jetson updater/orchestrator")
+    p_orch.add_argument("--config", default="configs/orchestration/jetson_nano.yaml")
+    p_orch.add_argument("--once", action="store_true", help="Check/apply updates once and exit")
+    p_orch.add_argument(
+        "--target",
+        default=None,
+        help="Target to update: all, model, config, program",
+    )
+    p_orch.add_argument("--force", action="store_true", help="Reinstall even if state says current")
+    p_orch.add_argument("--release-tag", default=None, help="Specific GitHub release tag to use")
+    p_orch.add_argument("--rollback", action="store_true", help="Rollback the last file update")
+
     args = parser.parse_args(argv)
     setup_logging(args.log_level)
 
@@ -68,6 +80,8 @@ def main(argv: list[str] | None = None) -> None:
         _cmd_benchmark(args)
     elif args.command == "calibrate":
         _cmd_calibrate(args)
+    elif args.command == "orchestrator":
+        _cmd_orchestrator(args)
     else:
         parser.print_help()
         sys.exit(1)
@@ -157,6 +171,25 @@ def _cmd_calibrate(args: argparse.Namespace) -> None:
     cal = calibrate_checkerboard(images, board_size=board, square_size_m=args.square_size)
     cal.save(args.output)
     print(f"Calibration saved to {args.output}  (RMS error = {cal.reprojection_error:.4f})")
+
+
+def _cmd_orchestrator(args: argparse.Namespace) -> None:
+    from edge_ai_mass.orchestration.start import Orchestrator
+
+    orchestrator = Orchestrator.from_config_file(args.config)
+    if args.rollback:
+        result = orchestrator.rollback(target=args.target)
+        print(result.message)
+        return
+    if args.once:
+        result = orchestrator.run_once(
+            target=args.target,
+            force=args.force,
+            release_tag=args.release_tag,
+        )
+        print(result.message)
+        return
+    orchestrator.run_forever()
 
 
 # ------------------------------------------------------------------
