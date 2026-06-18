@@ -151,6 +151,14 @@ class EdgeMqttClient:
                 required_payload_fields=required_payload_fields(expected_event_name),
                 deduper=self.deduper,
             )
+            logger.info(
+                "Received MQTT command on %s: event=%s message_id=%s correlation_id=%s request_id=%s",
+                topic,
+                envelope.event_name,
+                envelope.message_id,
+                envelope.correlation_id,
+                envelope.request_id,
+            )
         except CommandValidationError as exc:
             logger.warning("Rejected MQTT command: %s", exc.summary)
             self.publish_error(
@@ -163,11 +171,24 @@ class EdgeMqttClient:
         self.on_command(envelope)
 
     def _publish_envelope(self, suffix: str, envelope: Envelope) -> None:
+        topic = self.topic(suffix)
         if self._client is None:
-            logger.info("MQTT client is not connected; event not published: %s", envelope.event_name)
+            logger.info(
+                "MQTT client is not connected; event not published on %s: %s",
+                topic,
+                envelope.event_name,
+            )
             return
+        logger.info(
+            "Publishing MQTT event on %s: event=%s message_id=%s correlation_id=%s request_id=%s",
+            topic,
+            envelope.event_name,
+            envelope.message_id,
+            envelope.correlation_id,
+            envelope.request_id,
+        )
         self._client.publish(
-            self.topic(suffix),
+            topic,
             envelope.to_json(),
             qos=self.config.mqtt.qos,
             retain=False,
