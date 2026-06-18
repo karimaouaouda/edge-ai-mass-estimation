@@ -60,6 +60,7 @@ mlops = [
 orchestration = [
     "kaggle>=1.6",
     "paho-mqtt>=2.1",
+    "psutil>=5.9",
 ]
 all = ["edge-ai-mass[depth,dev,data,eval,mlops,orchestration]"]
 

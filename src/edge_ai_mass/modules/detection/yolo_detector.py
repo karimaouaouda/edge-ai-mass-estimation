@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import cv2
 import numpy as np
 
 from edge_ai_mass.modules.base import BaseModule
@@ -39,7 +40,7 @@ class YOLODetector(BaseModule):
         self.conf_threshold: float = config.get("conf_threshold", 0.25)
         self.iou_threshold: float = config.get("iou_threshold", 0.45)
         self.img_size: int = config.get("img_size", 640)
-        self.class_map: dict[int, str] = config.get("class_map", DEFAULT_CLASSES)
+        self.class_map: dict[int, str] | None = config.get("class_map")
         self._model: Any = None
 
     def load(self) -> None:
@@ -58,21 +59,33 @@ class YOLODetector(BaseModule):
             verbose=False,
         )
         detections: list[Detection] = []
+        image_h, image_w = image.shape[:2]
         for r in results:
             boxes = r.boxes
             masks = r.masks
+            names = self.class_map or getattr(r, "names", None) or getattr(self._model, "names", None)
             for i, box in enumerate(boxes):
                 cls_id = int(box.cls[0])
                 mask = None
                 if masks is not None:
                     mask = masks.data[i].cpu().numpy().astype(np.uint8)
+                    if mask.shape[:2] != (image_h, image_w):
+                        mask = cv2.resize(mask, (image_w, image_h), interpolation=cv2.INTER_NEAREST)
                 detections.append(
                     Detection(
                         bbox=box.xyxy[0].cpu().numpy(),
                         mask=mask,
                         class_id=cls_id,
-                        class_name=self.class_map.get(cls_id, f"class_{cls_id}"),
+                        class_name=_class_name(names, cls_id),
                         confidence=float(box.conf[0]),
                     )
                 )
         return detections
+
+
+def _class_name(names: Any, cls_id: int) -> str:
+    if isinstance(names, dict):
+        return str(names.get(cls_id, f"class_{cls_id}"))
+    if isinstance(names, (list, tuple)) and 0 <= cls_id < len(names):
+        return str(names[cls_id])
+    return DEFAULT_CLASSES.get(cls_id, f"class_{cls_id}")

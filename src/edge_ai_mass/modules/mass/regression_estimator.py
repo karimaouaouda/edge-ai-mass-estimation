@@ -17,7 +17,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from edge_ai_mass.modules.base import BaseModule
+from edge_ai_mass.modules.base import BaseModule, ModuleResult
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,7 @@ class RegressionMassEstimator(BaseModule):
         self.hidden_dim: int = config.get("hidden_dim", 64)
         self.num_classes: int = config.get("num_classes", 9)
         self.device: str = config.get("device", "cuda" if torch.cuda.is_available() else "cpu")
+        self.require_checkpoint: bool = config.get("require_checkpoint", False)
         self._model: MassRegressionHead | None = None
 
     def load(self) -> None:
@@ -67,6 +68,10 @@ class RegressionMassEstimator(BaseModule):
             state = torch.load(self.checkpoint_path, map_location=self.device)
             self._model.load_state_dict(state)
         else:
+            if self.require_checkpoint:
+                raise FileNotFoundError(
+                    f"Mass regression checkpoint is required but was not found: {self.checkpoint_path}"
+                )
             logger.warning("No checkpoint found — using untrained regression head")
         self._model.to(self.device).eval()
         self._is_loaded = True
@@ -74,7 +79,10 @@ class RegressionMassEstimator(BaseModule):
     def _forward(self, image: np.ndarray, **kwargs: Any) -> dict[str, Any]:
         features_dict: dict[str, Any] = kwargs["features"]
         feature_vec = self._extract_features(features_dict)
-        class_id = features_dict.get("class_id", 0)
+        class_id = int(features_dict.get("class_id", 0))
+        if class_id < 0 or class_id >= self.num_classes:
+            logger.warning("Class id %s is outside regression embedding range; using 0", class_id)
+            class_id = 0
 
         with torch.no_grad():
             feat_t = torch.tensor(feature_vec, dtype=torch.float32).unsqueeze(0)
@@ -82,11 +90,16 @@ class RegressionMassEstimator(BaseModule):
             cls_tensor = torch.tensor([class_id], dtype=torch.long).to(self.device)
             mass_kg = float(self._model(feat_tensor, cls_tensor).item())
 
-        return {
-            "mass_kg": mass_kg,
-            "volume_m3": None,
-            "material": features_dict.get("class_name", "unknown"),
-        }
+        return ModuleResult(
+            data={
+                "mass_kg": mass_kg,
+                "volume_m3": features_dict.get("volume_m3"),
+                "volume_method": "geometry" if features_dict.get("volume_m3") is not None else "",
+                "material": features_dict.get("material") or features_dict.get("class_name", "unknown"),
+                "warnings": [],
+            },
+            metadata={"method": "regression"},
+        )
 
     def _extract_features(self, f: dict[str, Any]) -> list[float]:
         """Build a fixed-length feature vector from the detection context."""
@@ -104,12 +117,22 @@ class RegressionMassEstimator(BaseModule):
             ds.get("max", 0.0),
         ]
 
+        geometry = f.get("geometry") or {}
+        geometry_feats = [
+            geometry.get("width_m", 0.0),
+            geometry.get("height_m", 0.0),
+            geometry.get("projected_area_m2", 0.0),
+            geometry.get("mean_height_m", 0.0),
+            geometry.get("max_height_m", 0.0),
+            geometry.get("volume_m3", f.get("volume_m3") or 0.0),
+        ]
+
         mask = f.get("mask")
         mask_area = float(np.sum(mask > 0)) if mask is not None else area
         mask_ratio = mask_area / max(area, 1.0)
 
         # Pad / truncate to input_dim
-        raw = [w, h, area, mask_area, mask_ratio] + depth_feats
+        raw = [w, h, area, mask_area, mask_ratio] + depth_feats + geometry_feats
         raw = raw[: self.input_dim]
         raw += [0.0] * max(0, self.input_dim - len(raw))
         return raw

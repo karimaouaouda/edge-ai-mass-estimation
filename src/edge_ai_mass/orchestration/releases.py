@@ -28,6 +28,7 @@ class GitHubReleaseNotFound(GitHubReleaseError):
 class ReleaseAsset:
     name: str
     download_url: str
+    api_url: str = ""
     size: int = 0
     content_type: str = ""
 
@@ -100,11 +101,23 @@ class GitHubReleaseClient:
 
     def download_asset(self, asset: ReleaseAsset, destination: Path) -> Path:
         destination.parent.mkdir(parents=True, exist_ok=True)
-        request = self._request(asset.download_url)
+        download_url = asset.api_url or asset.download_url
+        accept = "application/octet-stream" if asset.api_url else None
+        request = self._request(download_url, accept=accept)
         logger.info("Downloading release asset %s", asset.name)
-        with urllib.request.urlopen(request, timeout=self.settings.timeout_seconds) as response:
-            with destination.open("wb") as out:
-                shutil.copyfileobj(response, out)
+        try:
+            with urllib.request.urlopen(request, timeout=self.settings.timeout_seconds) as response:
+                with destination.open("wb") as out:
+                    shutil.copyfileobj(response, out)
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise GitHubReleaseError(
+                "Failed to download GitHub release asset "
+                f"{asset.name!r} from {self.settings.owner}/{self.settings.repo}. "
+                f"HTTP {exc.code}: {_github_error_message(body)}. "
+                "For private repositories, release assets must be downloaded with a token "
+                "that can read the repository contents."
+            ) from exc
         return destination
 
     def _get_json(self, url: str, *, release_selector: str) -> dict[str, Any]:
@@ -127,9 +140,14 @@ class GitHubReleaseClient:
                 f"{self.settings.owner}/{self.settings.repo}: {body}"
             ) from exc
 
-    def _request(self, url: str) -> urllib.request.Request:
+    def _request(
+        self,
+        url: str,
+        *,
+        accept: str | None = None,
+    ) -> urllib.request.Request:
         headers = {
-            "Accept": "application/vnd.github+json",
+            "Accept": accept or "application/vnd.github+json",
             "User-Agent": "edge-ai-mass-orchestrator",
         }
         if self.settings.token:
@@ -142,6 +160,7 @@ def _parse_release(data: dict[str, Any]) -> Release:
         ReleaseAsset(
             name=str(item.get("name") or ""),
             download_url=str(item.get("browser_download_url") or ""),
+            api_url=str(item.get("url") or ""),
             size=int(item.get("size") or 0),
             content_type=str(item.get("content_type") or ""),
         )
@@ -155,3 +174,13 @@ def _parse_release(data: dict[str, Any]) -> Release:
         draft=bool(data.get("draft", False)),
         assets=[asset for asset in assets if asset.name and asset.download_url],
     )
+
+
+def _github_error_message(body: str) -> str:
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return body[:300] or "empty response"
+    if isinstance(payload, dict):
+        return str(payload.get("message") or payload)
+    return str(payload)

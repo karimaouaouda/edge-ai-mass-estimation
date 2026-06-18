@@ -11,7 +11,8 @@ from typing import Any
 
 import numpy as np
 
-from edge_ai_mass.modules.base import BaseModule
+from edge_ai_mass.modules.base import BaseModule, ModuleResult
+from edge_ai_mass.modules.material import ClassMaterialMapper
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class DensityMassEstimator(BaseModule):
         super().__init__(config)
         self.densities: dict[str, float] = config.get("densities", MATERIAL_DENSITIES)
         self.pixel_to_m: float = config.get("pixel_to_m", 0.001)  # default calibration
+        self.material_mapper = ClassMaterialMapper.from_config(config)
 
     def load(self) -> None:
         self._is_loaded = True  # no model to load — pure computation
@@ -52,20 +54,36 @@ class DensityMassEstimator(BaseModule):
         features: dict[str, Any] = kwargs["features"]
         depth_stats = features.get("depth_stats", {})
         class_name = features.get("class_name", "other")
+        material = features.get("material") or self.material_mapper.material_for(class_name)
         mask = features.get("mask")
         bbox = features.get("bbox")
+        warnings = list(features.get("warnings", []))
 
-        # Volume estimation: integrate depth inside mask
-        volume_m3 = self._estimate_volume(image, mask, bbox, depth_stats)
-        density = self.densities.get(class_name, self.densities["other"])
+        geometry = features.get("geometry") or {}
+        volume_m3 = features.get("volume_m3")
+        volume_method = "geometry"
+        if volume_m3 is None and isinstance(geometry, dict):
+            volume_m3 = geometry.get("volume_m3")
+            volume_method = geometry.get("method", "geometry")
+        if volume_m3 is None:
+            volume_m3 = self._estimate_volume(image, mask, bbox, depth_stats)
+            volume_method = "legacy_depth_range"
+            warnings.append("mass_used_legacy_volume_fallback")
+
+        density = self.densities.get(material, self.densities["other"])
         mass_kg = volume_m3 * density
 
-        return {
-            "mass_kg": mass_kg,
-            "volume_m3": volume_m3,
-            "material": class_name,
-            "density_used": density,
-        }
+        return ModuleResult(
+            data={
+                "mass_kg": mass_kg,
+                "volume_m3": volume_m3,
+                "volume_method": volume_method,
+                "material": material,
+                "density_used": density,
+                "warnings": warnings,
+            },
+            metadata={"method": "density"},
+        )
 
     def _estimate_volume(
         self,

@@ -61,4 +61,7 @@ class BaseModule(abc.ABC):
         t0 = time.perf_counter()
         data = self._forward(image, **kwargs)
         elapsed = (time.perf_counter() - t0) * 1000
+        if isinstance(data, ModuleResult):
+            data.latency_ms = elapsed
+            return data
         return ModuleResult(data=data, latency_ms=elapsed)

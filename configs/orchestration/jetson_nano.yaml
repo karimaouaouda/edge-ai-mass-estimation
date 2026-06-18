@@ -14,9 +14,9 @@ updates:
   run_on_start: true
 
   github:
-    owner: ${EDGE_AI_GITHUB_OWNER:drovenai}
+    owner: ${EDGE_AI_GITHUB_OWNER:karimaouaouda}
     repo: ${EDGE_AI_GITHUB_REPO:edge-ai-mass-estimation}
-    token: ${GITHUB_TOKEN:}
+    token: ${GITHUB_TOKEN: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}
     release: latest
     manifest_asset: edge-ai-update-manifest.json
     channel: dev

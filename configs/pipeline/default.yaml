@@ -2,6 +2,39 @@
 # Each stage has a primary model and an optional fallback.
 # The pipeline runs: detection → depth → mass (cascade).
 
+calibration:
+  # Set to a checkerboard calibration JSON when available.
+  path: ${EDGE_AI_CALIBRATION_PATH:}
+  required: false
+  undistort: false
+
+depth_scale:
+  # Depth Anything HF checkpoints may be metric or relative depending on model.
+  # Keep this explicit and tune scale/offset for the fixed camera setup.
+  output_type: ${EDGE_AI_DEPTH_OUTPUT_TYPE:metric}
+  scale: ${EDGE_AI_DEPTH_SCALE:1.0}
+  offset: ${EDGE_AI_DEPTH_OFFSET:0.0}
+  min_depth_m: 0.01
+  max_depth_m: 10.0
+  calibration_id: ${EDGE_AI_DEPTH_SCALE_ID:default-depth-scale}
+
+background:
+  # Prefer a saved metric .npy background depth map for accurate volume.
+  depth_path: ${EDGE_AI_BACKGROUND_DEPTH_PATH:}
+  metric: true
+  required: false
+  # Fallback constant background distance for development/smoke tests.
+  depth_m: ${EDGE_AI_BACKGROUND_DEPTH_M:1.0}
+  background_id: ${EDGE_AI_BACKGROUND_ID:default-background}
+
+geometry:
+  enabled: true
+  pixel_to_m: ${EDGE_AI_PIXEL_TO_M:0.001}
+  default_thickness_m: ${EDGE_AI_DEFAULT_THICKNESS_M:0.01}
+  min_height_m: 0.0
+  max_height_m: 1.0
+  height_mode: background_minus_object
+
 stages:
   detection:
     latency_budget_ms: 700
@@ -39,9 +72,20 @@ stages:
         input_dim: 32
         hidden_dim: 64
         num_classes: 9
+        require_checkpoint: true
     fallback:
       class: edge_ai_mass.modules.mass.density_estimator.DensityMassEstimator
       params:
+        class_to_material:
+          plastic_battle: plastic
+          plastic_bottle: plastic
+          rigid_plastic: plastic
+          plastic_bag: plastic
+          metal_can: metal
+          glass: glass
+          paper_cardboard: cardboard
+          organic_waste: organic
+          mixed_waste: other
         densities:
           plastic: 40.0
           glass: 300.0

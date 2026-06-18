@@ -74,6 +74,7 @@ def main() -> None:
         mask_area = float(np.sum(d.mask > 0)) if d.mask is not None else area
         mask_ratio = mask_area / max(area, 1.0)
         ds = obj.depth_stats
+        geometry = obj.geometry or {}
 
         rows.append({
             "bbox_w": w,
@@ -86,6 +87,12 @@ def main() -> None:
             "depth_std": ds.get("std", 0),
             "depth_min": ds.get("min", 0),
             "depth_max": ds.get("max", 0),
+            "geom_width_m": geometry.get("width_m", 0),
+            "geom_height_m": geometry.get("height_m", 0),
+            "projected_area_m2": geometry.get("projected_area_m2", 0),
+            "mean_height_m": geometry.get("mean_height_m", 0),
+            "max_height_m": geometry.get("max_height_m", 0),
+            "volume_m3": obj.volume_m3 or geometry.get("volume_m3", 0),
             "class_id": int(row["class_id"]),
             "mass_kg": float(row["mass_kg"]),
         })

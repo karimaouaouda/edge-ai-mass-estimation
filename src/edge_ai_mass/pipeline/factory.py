@@ -11,6 +11,7 @@ import logging
 from typing import Any
 
 from edge_ai_mass.modules.base import BaseModule
+from edge_ai_mass.modules.geometry import GeometryEstimator
 from edge_ai_mass.pipeline.pipeline import Pipeline, Stage
 from edge_ai_mass.utils.config import load_config
 
@@ -57,4 +58,15 @@ def build_pipeline(config_path: str) -> Pipeline:
             budget,
         )
 
+    if _geometry_enabled(cfg):
+        pipeline.set_geometry_estimator(GeometryEstimator.from_config(cfg))
+        logger.info("Registered geometry estimator for calibration-aware volume estimation")
+
     return pipeline
+
+
+def _geometry_enabled(cfg: dict[str, Any]) -> bool:
+    geometry_cfg = cfg.get("geometry") or {}
+    if "enabled" in geometry_cfg:
+        return bool(geometry_cfg["enabled"])
+    return any(key in cfg for key in ("calibration", "depth_scale", "background"))

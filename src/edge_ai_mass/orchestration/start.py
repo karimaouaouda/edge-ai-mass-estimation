@@ -237,11 +237,17 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.once:
-        result = orchestrator.run_once(
-            target=args.target,
-            force=args.force,
-            release_tag=args.release_tag,
-        )
+        try:
+            result = orchestrator.run_once(
+                target=args.target,
+                force=args.force,
+                release_tag=args.release_tag,
+            )
+        except Exception as exc:
+            if args.log_level.upper() == "DEBUG":
+                logger.exception("One-shot update failed")
+            print(f"Update failed: {exc}", file=sys.stderr)
+            sys.exit(2)
         print(result.message)
         return
 
