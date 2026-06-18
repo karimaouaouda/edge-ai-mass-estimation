@@ -126,6 +126,7 @@ class EdgeDeviceAgent:
         correlation_id: str | None = None,
         request_id: str | None = None,
     ) -> dict[str, Any] | None:
+        print(f"Sending telemetry with status={status}, correlation_id={correlation_id}, request_id={request_id}")
         if self.telemetry is None:
             self.telemetry = TelemetrySampler(
                 inference_busy=lambda: self._inference_busy,
@@ -147,6 +148,7 @@ class EdgeDeviceAgent:
             return None
 
     def handle_command(self, envelope: Envelope) -> None:
+        print(f"Received command: {envelope.event_name} with payload: {envelope.payload}")
         if envelope.event_name == "inference.requested":
             self._handle_inference(envelope)
         elif envelope.event_name == "preview.start_requested":
