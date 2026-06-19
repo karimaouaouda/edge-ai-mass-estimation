@@ -204,7 +204,7 @@ class EdgeMqttClient:
     ) -> None:
         try:
             print(f"Connected to MQTT broker with reason code: {reason_code}")
-            if reason_code == "Success" or int(reason_code) != 0:
+            if reason_code != "Success":
                 logger.error("MQTT connection failed with rc=%s", reason_code)
                 return
             client.subscribe(self.command_topic, qos=self.config.mqtt.qos)
