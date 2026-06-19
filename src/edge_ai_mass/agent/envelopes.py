@@ -158,22 +158,22 @@ def parse_envelope(raw: bytes | str | dict[str, Any]) -> Envelope:
         print(f"Invalid payload type: {type(payload)}. Payload must be a dictionary. ({payload})")
         raise CommandValidationError(
             "Envelope payload must be a JSON object",
-            source_message_id=_string_or_none(data.get("message_id")),
+            source_message_id=_string_or_none(data.get("request_id")),
             field="payload",
         )
 
-    required = ["message_id", "correlation_id", "event_name", "device_id", "issued_at"]
+    required = ["request_id", "correlation_id", "event_name", "device_id", "issued_at"]
     for field_name in required:
         if not str(data.get(field_name) or "").strip():
             raise CommandValidationError(
                 f"Envelope missing required field: {field_name}",
-                source_message_id=_string_or_none(data.get("message_id")),
+                source_message_id=_string_or_none(data.get("request_id")),
                 field=field_name,
             )
 
     request_id = data.get("request_id")
     return Envelope(
-        message_id=str(data["message_id"]),
+        message_id=str(data["request_id"]),
         correlation_id=str(data["correlation_id"]),
         request_id=str(request_id) if request_id is not None else None,
         event_name=str(data["event_name"]),
