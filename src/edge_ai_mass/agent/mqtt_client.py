@@ -202,12 +202,15 @@ class EdgeMqttClient:
         reason_code: Any,
         *_extra: Any,
     ) -> None:
-        print(f"Connected to MQTT broker with reason code: {reason_code}")
-        if int(reason_code) != 0:
-            logger.error("MQTT connection failed with rc=%s", reason_code)
-            return
-        client.subscribe(self.command_topic, qos=self.config.mqtt.qos)
-        logger.info("Subscribed to backend MQTT commands on %s", self.command_topic)
+        try:
+            print(f"Connected to MQTT broker with reason code: {reason_code}")
+            if reason_code == "Success" or int(reason_code) != 0:
+                logger.error("MQTT connection failed with rc=%s", reason_code)
+                return
+            client.subscribe(self.command_topic, qos=self.config.mqtt.qos)
+            logger.info("Subscribed to backend MQTT commands on %s", self.command_topic)
+        except Exception as exc:
+            logger.error("Error in MQTT on_connect handler: %s", exc)
 
     def _on_message(self, _client: Any, _userdata: Any, message: Any) -> None:
         print(f"Received MQTT message on {message.topic}: {message.payload}")
