@@ -154,7 +154,7 @@ def parse_envelope(raw: bytes | str | dict[str, Any]) -> Envelope:
     if not isinstance(data, dict):
         raise CommandValidationError("Envelope must be a JSON object")
 
-    payload = data.get("payload")
+    payload = data.get("payload") or data
     if not isinstance(payload, dict):
         raise CommandValidationError(
             "Envelope payload must be a JSON object",
