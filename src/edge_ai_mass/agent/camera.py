@@ -23,6 +23,14 @@ class CapturedFrame:
     metadata: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class VideoCaptureSpec:
+    """OpenCV source and optional backend derived from a payload reference."""
+
+    source: int | str
+    backend: int | None = None
+
+
 class CaptureAdapter:
     """Capture frames from backend source descriptors."""
 
@@ -36,11 +44,9 @@ class CaptureAdapter:
 
     def is_camera_connected(self, source_reference: str = "camera:0") -> bool:
         try:
-            import cv2
+            cap = open_video_capture(source_reference)
         except ImportError:
             return False
-        index = _camera_index(source_reference)
-        cap = cv2.VideoCapture(index)
         try:
             return bool(cap.isOpened())
         finally:
@@ -52,8 +58,8 @@ class CaptureAdapter:
         except ImportError as exc:
             raise CaptureError("OpenCV is required for camera capture") from exc
 
-        index = _camera_index(source_reference)
-        cap = cv2.VideoCapture(index)
+        spec = video_capture_spec(source_reference, cv2_module=cv2)
+        cap = open_video_capture(source_reference, cv2_module=cv2)
         try:
             if not cap.isOpened():
                 raise CaptureError(f"Camera source is not available: {source_reference}")
@@ -64,7 +70,7 @@ class CaptureAdapter:
                 image=frame,
                 source_type="camera",
                 source_reference=source_reference,
-                metadata={"camera_index": index},
+                metadata={"capture_source": spec.source},
             )
         finally:
             cap.release()
@@ -87,8 +93,48 @@ class CaptureAdapter:
         )
 
 
-def _camera_index(source_reference: str) -> int:
+def video_capture_spec(
+    source_reference: str,
+    *,
+    cv2_module: Any | None = None,
+) -> VideoCaptureSpec:
+    """Resolve backend `camera_source` values into OpenCV arguments."""
+
     source_reference = str(source_reference or "camera:0")
     if source_reference.startswith("camera:"):
-        return int(source_reference.split(":", 1)[1])
-    return int(source_reference)
+        return VideoCaptureSpec(source=int(source_reference.split(":", 1)[1]))
+    if source_reference.startswith("gstreamer:"):
+        if cv2_module is None:
+            import cv2 as cv2_module
+
+        pipeline = source_reference.split(":", 1)[1]
+        return VideoCaptureSpec(source=pipeline, backend=cv2_module.CAP_GSTREAMER)
+    try:
+        return VideoCaptureSpec(source=int(source_reference))
+    except ValueError:
+        return VideoCaptureSpec(source=source_reference)
+
+
+def open_video_capture(
+    source_reference: str,
+    *,
+    cv2_module: Any | None = None,
+) -> Any:
+    """Open an OpenCV capture for a backend camera source reference."""
+
+    if cv2_module is None:
+        import cv2 as cv2_module
+
+    spec = video_capture_spec(source_reference, cv2_module=cv2_module)
+    if spec.backend is None:
+        return cv2_module.VideoCapture(spec.source)
+    return cv2_module.VideoCapture(spec.source, spec.backend)
+
+
+def _camera_index(source_reference: str) -> int:
+    """Backward-compatible numeric camera index parser."""
+
+    spec = video_capture_spec(source_reference)
+    if not isinstance(spec.source, int):
+        raise ValueError(f"Camera source is not a numeric index: {source_reference}")
+    return spec.source

@@ -17,7 +17,11 @@ from edge_ai_mass.agent.media import MediaRenderer, MediaUploadJob
 from edge_ai_mass.agent.model_manager import ModelDeploymentError, ModelManager
 from edge_ai_mass.agent.mqtt_client import EdgeMqttClient
 from edge_ai_mass.agent.outbox import FileOutbox
-from edge_ai_mass.agent.preview import PreviewError, PreviewManager
+from edge_ai_mass.agent.preview import (
+    PreviewError,
+    PreviewManager,
+    SimulatedPreviewPeerFactory,
+)
 from edge_ai_mass.agent.secrets import EnvironmentSecretStore, SecretStore
 from edge_ai_mass.agent.telemetry import TelemetrySampler
 
@@ -54,7 +58,7 @@ class EdgeDeviceAgent:
         self.telemetry = telemetry
         self.inference_runner_factory = inference_runner_factory
         camera_probe = preview_camera_available or CaptureAdapter().is_camera_connected
-        self.preview_manager = preview_manager or PreviewManager(camera_available=camera_probe)
+        self.preview_manager = preview_manager or self._build_preview_manager(camera_probe)
         self.active_models = dict(config.device.active_models)
         self.model_manager = model_manager or ModelManager(
             config.runtime.model_dir,
@@ -103,7 +107,7 @@ class EdgeDeviceAgent:
         self.start()
         next_telemetry = time.monotonic() + self.config.runtime.telemetry_interval_seconds
         while not self._stop_requested:
-            self._publish_preview_expiry_events()
+            self._publish_preview_runtime_events()
             self.flush_outbox()
             now = time.monotonic()
             if now >= next_telemetry:
@@ -488,14 +492,31 @@ class EdgeDeviceAgent:
             request_id=request_id,
         )
 
-    def _publish_preview_expiry_events(self) -> None:
-        for event in self.preview_manager.expire_sessions():
+    def _publish_preview_runtime_events(self) -> None:
+        events = self.preview_manager.poll_events()
+        events.extend(self.preview_manager.expire_sessions())
+        for event in events:
             self.publish_event(
                 event.event_name,
                 event.payload,
                 correlation_id=event.payload.get("correlation_id"),
                 request_id=event.payload.get("request_id"),
             )
+
+    def _build_preview_manager(
+        self,
+        camera_probe: Callable[[str], bool],
+    ) -> PreviewManager:
+        if self.config.runtime.preview_backend == "simulated":
+            peer_factory = SimulatedPreviewPeerFactory()
+        else:
+            from edge_ai_mass.agent.webrtc import AiortcPreviewPeerFactory
+
+            peer_factory = AiortcPreviewPeerFactory()
+        return PreviewManager(
+            peer_factory=peer_factory,
+            camera_available=camera_probe,
+        )
 
     def _handle_model_deployment(self, envelope: Envelope) -> None:
         request_id = _request_id(envelope)

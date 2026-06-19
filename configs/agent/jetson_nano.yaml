@@ -38,6 +38,8 @@ runtime:
   telemetry_interval_seconds: ${DROVENAI_TELEMETRY_INTERVAL_SECONDS:30}
   # http remains the default; mqtt uses the backend mqtt:consume telemetry path.
   telemetry_transport: ${DROVENAI_TELEMETRY_TRANSPORT:http}
+  # aiortc sends real camera frames; simulated is only for local contract tests.
+  preview_backend: ${DROVENAI_PREVIEW_BACKEND:aiortc}
   media_upload_retries: ${DROVENAI_MEDIA_UPLOAD_RETRIES:5}
   outbox_path: ${DROVENAI_OUTBOX_PATH:.edge_ai_mass/agent/outbox}
   model_dir: ${DROVENAI_MODEL_DIR:.edge_ai_mass/agent/models}

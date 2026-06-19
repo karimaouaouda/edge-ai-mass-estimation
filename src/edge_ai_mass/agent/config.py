@@ -11,6 +11,7 @@ from edge_ai_mass.agent.secrets import SecretStore, require_secret
 from edge_ai_mass.utils.config import load_config
 
 VALID_TELEMETRY_TRANSPORTS = {"http", "mqtt", "both"}
+VALID_PREVIEW_BACKENDS = {"aiortc", "simulated"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +59,7 @@ class RuntimeSettings:
 
     telemetry_interval_seconds: float = 30.0
     telemetry_transport: str = "http"
+    preview_backend: str = "aiortc"
     media_upload_retries: int = 5
     outbox_path: Path = Path("/var/lib/drovenai-agent/outbox")
     model_dir: Path = Path("/var/lib/drovenai-agent/models")
@@ -143,9 +145,17 @@ class AgentConfig:
                 f"{sorted(VALID_TELEMETRY_TRANSPORTS)}, got {telemetry_transport!r}"
             )
 
+        preview_backend = str(runtime_raw.get("preview_backend") or "aiortc").lower()
+        if preview_backend not in VALID_PREVIEW_BACKENDS:
+            raise ValueError(
+                "runtime.preview_backend must be one of "
+                f"{sorted(VALID_PREVIEW_BACKENDS)}, got {preview_backend!r}"
+            )
+
         runtime = RuntimeSettings(
             telemetry_interval_seconds=float(runtime_raw.get("telemetry_interval_seconds", 30)),
             telemetry_transport=telemetry_transport,
+            preview_backend=preview_backend,
             media_upload_retries=int(runtime_raw.get("media_upload_retries", 5)),
             outbox_path=_resolve_path(
                 runtime_raw.get("outbox_path", "/var/lib/drovenai-agent/outbox"),

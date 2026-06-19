@@ -30,6 +30,14 @@ class PreviewEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class PreviewPeerEvent:
+    """Lifecycle event emitted asynchronously by a media peer."""
+
+    kind: str
+    payload: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
 class WebRTCAnswer:
     """Result produced by a WebRTC peer after accepting an offer."""
 
@@ -57,6 +65,9 @@ class PreviewPeer(Protocol):
 
     def close(self) -> None:
         """Close media and signaling resources."""
+
+    def poll_events(self) -> list[PreviewPeerEvent]:
+        """Return pending connection, media, ICE, or failure events."""
 
 
 class SimulatedPreviewPeer:
@@ -120,6 +131,9 @@ class SimulatedPreviewPeer:
     def close(self) -> None:
         return
 
+    def poll_events(self) -> list[PreviewPeerEvent]:
+        return []
+
 
 class SimulatedPreviewPeerFactory:
     """Factory for local preview peers."""
@@ -142,6 +156,7 @@ class PreviewSession:
     max_width: int
     max_height: int
     max_fps: int
+    ice_servers: list[dict[str, Any]]
     audio_enabled: bool = False
     peer_id: str | None = None
     state: str = "ready"
@@ -282,6 +297,44 @@ class PreviewManager:
             events.append(PreviewEvent("preview.stopped", payload))
         return events
 
+    def poll_events(self) -> list[PreviewEvent]:
+        """Convert asynchronous media-peer state into backend preview events."""
+
+        events: list[PreviewEvent] = []
+        for request_id, session in list(self.sessions.items()):
+            if session.peer is None:
+                continue
+            for peer_event in session.peer.poll_events():
+                if peer_event.kind == "media_started":
+                    started = self._media_started_event(session, peer_event.payload)
+                    if started is not None:
+                        events.append(started)
+                elif peer_event.kind == "ice_candidate":
+                    events.append(
+                        PreviewEvent(
+                            "preview.webrtc_ice_candidate",
+                            {
+                                "request_id": session.request_id,
+                                "correlation_id": session.correlation_id,
+                                "peer_id": session.peer_id,
+                                "candidate": peer_event.payload["candidate"],
+                            },
+                        )
+                    )
+                elif peer_event.kind == "failed":
+                    events.append(self._peer_failed_event(session, peer_event.payload))
+                    self._close_and_remove(request_id, session)
+                    break
+                elif peer_event.kind == "disconnected":
+                    payload = self.stop(
+                        {"reason": peer_event.payload.get("reason", "peer_disconnected")},
+                        request_id=request_id,
+                        correlation_id=session.correlation_id,
+                    )
+                    events.append(PreviewEvent("preview.stopped", payload))
+                    break
+        return events
+
     def stop_all(self) -> None:
         for session in self.sessions.values():
             if session.peer is not None:
@@ -293,7 +346,6 @@ class PreviewManager:
         session: PreviewSession,
         payload: dict[str, Any],
     ) -> list[PreviewEvent]:
-        print(f"Handling offer for session {session.request_id} with payload: {payload}")
         peer_id = str(payload.get("peer_id") or "")
         offer_sdp = str(payload.get("sdp") or "")
         metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
@@ -302,12 +354,17 @@ class PreviewManager:
         if session.peer is None:
             session.peer = self.peer_factory(session)
 
-        answer = session.peer.create_answer(
-            offer_sdp=offer_sdp,
-            session=session,
-            peer_id=peer_id,
-            metadata=metadata,
-        )
+        try:
+            answer = session.peer.create_answer(
+                offer_sdp=offer_sdp,
+                session=session,
+                peer_id=peer_id,
+                metadata=metadata,
+            )
+        except Exception:
+            session.state = "failed"
+            self._close_and_remove(session.request_id, session)
+            raise
         session.selected_codec = str(answer.media.get("codec") or session.supported_codecs[0])
 
         events = [
@@ -354,6 +411,58 @@ class PreviewManager:
                 )
             )
         return events
+
+    def _media_started_event(
+        self,
+        session: PreviewSession,
+        details: dict[str, Any],
+    ) -> PreviewEvent | None:
+        if session.state == "active":
+            return None
+        session.state = "active"
+        session.selected_codec = str(
+            details.get("selected_codec")
+            or session.selected_codec
+            or session.supported_codecs[0]
+        )
+        return PreviewEvent(
+            "preview.started",
+            {
+                "request_id": session.request_id,
+                "correlation_id": session.correlation_id,
+                "peer_id": session.peer_id,
+                "started_at": _iso_from_timestamp(self.time_fn()),
+                "selected_codec": session.selected_codec,
+                "selected_resolution": {
+                    "width": int(details.get("width") or session.max_width),
+                    "height": int(details.get("height") or session.max_height),
+                },
+                "fps": int(details.get("fps") or session.max_fps),
+            },
+        )
+
+    def _peer_failed_event(
+        self,
+        session: PreviewSession,
+        details: dict[str, Any],
+    ) -> PreviewEvent:
+        session.state = "failed"
+        return PreviewEvent(
+            "preview.failed",
+            {
+                "request_id": session.request_id,
+                "correlation_id": session.correlation_id,
+                "error_type": str(details.get("error_type") or "preview_internal_error"),
+                "summary": str(details.get("summary") or "WebRTC preview failed")[:500],
+                "retryable": bool(details.get("retryable", False)),
+                "failed_at": _iso_from_timestamp(self.time_fn()),
+            },
+        )
+
+    def _close_and_remove(self, request_id: str, session: PreviewSession) -> None:
+        self.sessions.pop(request_id, None)
+        if session.peer is not None:
+            session.peer.close()
 
     def _handle_ice_candidate(
         self,
@@ -423,8 +532,26 @@ def _webrtc_session_options(value: Any) -> dict[str, Any]:
         "max_width": int(video.get("max_width") or 1280),
         "max_height": int(video.get("max_height") or 720),
         "max_fps": int(video.get("max_fps") or 10),
+        "ice_servers": _ice_servers(webrtc.get("ice_servers")),
         "audio_enabled": bool(audio.get("enabled", False)),
     }
+
+
+def _ice_servers(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    servers = []
+    for item in value:
+        if not isinstance(item, dict) or not item.get("urls"):
+            continue
+        servers.append(
+            {
+                key: item[key]
+                for key in ("urls", "username", "credential")
+                if item.get(key) is not None
+            }
+        )
+    return servers
 
 
 def _iso_from_timestamp(value: float) -> str:

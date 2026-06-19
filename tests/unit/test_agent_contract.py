@@ -57,6 +57,14 @@ def test_agent_config_requires_device_id_and_http_token():
             }
         )
 
+    with pytest.raises(ValueError, match="preview_backend"):
+        AgentConfig.from_mapping(
+            {
+                "device": {"id": "jetson-01"},
+                "runtime": {"preview_backend": "unknown"},
+            }
+        )
+
 
 def test_envelope_round_trip_and_command_validation():
     envelope = new_envelope(

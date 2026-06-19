@@ -62,7 +62,11 @@ orchestration = [
     "paho-mqtt>=2.1",
     "psutil>=5.9",
 ]
-all = ["edge-ai-mass[depth,dev,data,eval,mlops,orchestration]"]
+webrtc = [
+    "aiortc>=1.9",
+    "av>=12",
+]
+all = ["edge-ai-mass[depth,dev,data,eval,mlops,orchestration,webrtc]"]
 
 [project.scripts]
 edge-ai-mass = "edge_ai_mass.cli:main"
