@@ -139,12 +139,15 @@ def parse_envelope(raw: bytes | str | dict[str, Any]) -> Envelope:
 
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8")
+        print(f"Received envelope as bytes: {raw}")
     if isinstance(raw, str):
         try:
+            print(f"Parsing envelope from JSON string: {raw}")
             data = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise CommandValidationError("Payload is not valid JSON") from exc
     else:
+        print(f"Parsing envelope from dict: {raw}")
         data = raw
 
     if not isinstance(data, dict):
