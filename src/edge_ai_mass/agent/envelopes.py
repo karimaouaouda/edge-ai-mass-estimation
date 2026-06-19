@@ -152,6 +152,7 @@ def parse_envelope(raw: bytes | str | dict[str, Any]) -> Envelope:
 
     payload = data.get("payload")
     if not isinstance(payload, dict):
+        print(f"Invalid payload type: {type(payload)}. Payload must be a dictionary. ({payload})")
         raise CommandValidationError(
             "Envelope payload must be a JSON object",
             source_message_id=_string_or_none(data.get("message_id")),
