@@ -119,6 +119,7 @@ def new_envelope(
 
     payload = payload or {}
     if not isinstance(payload, dict):
+        print(f"Invalid payload type: {type(payload)}. Payload must be a dictionary. ({payload})")
         raise EnvelopeError("Envelope payload must be a JSON object")
     workflow_correlation_id = correlation_id or payload.get("correlation_id") or str(uuid.uuid4())
     workflow_request_id = request_id if request_id is not None else payload.get("request_id")
