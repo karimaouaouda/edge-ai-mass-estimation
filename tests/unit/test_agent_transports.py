@@ -198,6 +198,27 @@ def test_mqtt_publish_preserves_dotted_backend_event_topic():
     assert json.loads(published["payload"])["message_id"] == envelope.message_id
 
 
+def test_mqtt_telemetry_uses_dedicated_topic_and_standard_envelope():
+    config = AgentConfig.from_mapping({"device": {"id": "jetson-01"}})
+    mqtt = EdgeMqttClient(config=config, on_command=lambda _envelope: None)
+    mqtt._client = FakePahoClient()
+    mqtt._connected.set()
+
+    envelope = mqtt.publish_telemetry(
+        {"status": "online", "health_status": "healthy"},
+        correlation_id="correlation-1",
+    )
+
+    published = mqtt._client.published[0]
+    payload = json.loads(published["payload"])
+    assert published["topic"] == "drovenai/devices/jetson-01/telemetry"
+    assert payload["event_name"] == "telemetry.reported"
+    assert payload["device_id"] == "jetson-01"
+    assert payload["correlation_id"] == "correlation-1"
+    assert payload["payload"]["status"] == "online"
+    assert envelope.message_id == payload["message_id"]
+
+
 def test_mqtt_publish_raises_when_paho_rejects_message():
     config = AgentConfig.from_mapping({"device": {"id": "jetson-01"}})
     mqtt = EdgeMqttClient(config=config, on_command=lambda _envelope: None)

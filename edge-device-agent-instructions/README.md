@@ -14,8 +14,8 @@ It describes how an edge device connects to the Laravel supervision backend, whi
 - Current MQTT local broker auth: anonymous in local Mosquitto config
 - Production MQTT auth target: per-device broker username/password and ACLs
 - Current implemented HTTP endpoints: telemetry ingest and media upload
-- Current implemented Laravel-to-device MQTT commands: inference, preview start, preview stop, model deployment
-- Current inbound MQTT server consumer: not yet implemented. Edge agents should still publish the event envelopes in this pack so the future consumer can route them to the existing Laravel actions.
+- Current implemented Laravel-to-device MQTT commands: inference, preview start, preview signaling, preview stop, model deployment
+- Current inbound MQTT server consumer: `php artisan mqtt:consume`, which validates envelopes, records traces, and dispatches supported domain events.
 
 ## How an AI agent should use these files
 
@@ -28,6 +28,7 @@ Read in this order:
 5. `05-python-iot-engineer-playbook.md`
 6. `06-local-testing-and-cli.md`
 7. `07-webrtc-preview-signaling.md`
+8. `08-backend-mqtt-message-flow.md`
 
 When implementing an edge agent, treat every `MUST` as required behavior. Treat `SHOULD` as the default unless hardware constraints force a documented exception.
 
@@ -40,6 +41,10 @@ Use these backend files to verify the contract when the Laravel app changes:
 - `Modules/Device/app/Actions/RegisterDeviceAction.php`
 - `Modules/Mqtt/app/Classes/TopicBuilder.php`
 - `Modules/Mqtt/app/Classes/MessageEnvelopeBuilder.php`
+- `Modules/Mqtt/app/Classes/TopicParser.php`
+- `Modules/Mqtt/app/Actions/ProcessInboundMqttMessageAction.php`
+- `app/Console/Commands/MqttConsume.php`
+- `Modules/Preview/app/Actions/PublishPreviewSignalAction.php`
 - `Modules/Inference/app/Actions/PublishInferenceCommandAction.php`
 - `Modules/Inference/app/Actions/StoreInferenceResultAction.php`
 - `Modules/Media/app/Http/Requests/StoreMediaUploadRequest.php`

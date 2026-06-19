@@ -9,6 +9,7 @@ import pytest
 
 from edge_ai_mass.agent.inference import normalize_pipeline_result
 from edge_ai_mass.agent.model_manager import ModelDeploymentError, ModelManager
+from edge_ai_mass.agent.outbox import FileOutbox
 from edge_ai_mass.agent.preview import PreviewError, PreviewManager
 from edge_ai_mass.agent.runner import EdgeDeviceAgent
 from edge_ai_mass.agent.config import AgentConfig
@@ -208,6 +209,7 @@ class RecordingMqtt:
 
     def __init__(self):
         self.events = []
+        self.telemetry_envelopes = []
 
     def publish_envelope(self, envelope):
         self.events.append(
@@ -218,6 +220,9 @@ class RecordingMqtt:
                 "request_id": envelope.request_id,
             }
         )
+
+    def publish_telemetry_envelope(self, envelope):
+        self.telemetry_envelopes.append(envelope)
 
     def publish_event(self, event_name, payload, *, correlation_id=None, request_id=None):
         self.events.append(
@@ -283,3 +288,95 @@ def test_agent_preview_command_flow_publishes_ready_then_signaling_events():
     ]
     assert mqtt.events[0]["payload"]["webrtc"]["role"] == "answerer"
     assert mqtt.events[1]["payload"]["peer_id"] == "operator-browser-1"
+
+
+class FixedTelemetry:
+    def sample(self, *, status="online"):
+        return {
+            "status": status,
+            "health_status": "healthy",
+            "reported_at": "2026-06-19T12:00:00Z",
+        }
+
+
+def test_agent_can_send_telemetry_through_mqtt():
+    config = AgentConfig.from_mapping(
+        {
+            "device": {"id": "jetson-01"},
+            "runtime": {"telemetry_transport": "mqtt"},
+        }
+    )
+    mqtt = RecordingMqtt()
+    agent = EdgeDeviceAgent(config, mqtt_client=mqtt, telemetry=FixedTelemetry())
+
+    response = agent.send_telemetry(
+        status="online",
+        correlation_id="correlation-1",
+        request_id="request-1",
+    )
+
+    assert response is None
+    assert len(mqtt.telemetry_envelopes) == 1
+    envelope = mqtt.telemetry_envelopes[0]
+    assert envelope.event_name == "telemetry.reported"
+    assert envelope.correlation_id == "correlation-1"
+    assert envelope.request_id == "request-1"
+    assert envelope.payload["status"] == "online"
+
+
+class DisconnectedMqtt(RecordingMqtt):
+    is_connected = False
+
+
+def test_disconnected_mqtt_telemetry_is_persisted_to_outbox(tmp_path):
+    config = AgentConfig.from_mapping(
+        {
+            "device": {"id": "jetson-01"},
+            "runtime": {
+                "telemetry_transport": "mqtt",
+                "outbox_path": str(tmp_path),
+            },
+        }
+    )
+    outbox = FileOutbox(tmp_path)
+    agent = EdgeDeviceAgent(
+        config,
+        mqtt_client=DisconnectedMqtt(),
+        telemetry=FixedTelemetry(),
+        outbox=outbox,
+    )
+
+    agent.send_telemetry(status="online")
+
+    records = outbox.due_records()
+    assert len(records) == 1
+    assert records[0].kind == "mqtt_telemetry"
+    assert records[0].payload["envelope"]["event_name"] == "telemetry.reported"
+
+
+def test_mqtt_telemetry_outbox_record_replays_with_same_message_id(tmp_path):
+    config = AgentConfig.from_mapping(
+        {
+            "device": {"id": "jetson-01"},
+            "runtime": {
+                "telemetry_transport": "mqtt",
+                "outbox_path": str(tmp_path),
+            },
+        }
+    )
+    outbox = FileOutbox(tmp_path)
+    original = new_envelope(
+        device_id="jetson-01",
+        event_name="telemetry.reported",
+        payload={"status": "online"},
+        correlation_id="correlation-1",
+    )
+    outbox.enqueue("mqtt_telemetry", {"envelope": original.to_dict()})
+    mqtt = RecordingMqtt()
+    agent = EdgeDeviceAgent(config, mqtt_client=mqtt, outbox=outbox)
+
+    agent.flush_outbox()
+
+    assert len(mqtt.telemetry_envelopes) == 1
+    assert mqtt.telemetry_envelopes[0].message_id == original.message_id
+    assert outbox.due_records() == []

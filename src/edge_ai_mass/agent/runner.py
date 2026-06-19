@@ -138,6 +138,29 @@ class EdgeDeviceAgent:
                 active_models=lambda: dict(self.active_models),
             )
         payload = self.telemetry.sample(status=status)
+        transport = self.config.runtime.telemetry_transport
+        http_response = None
+        if transport in {"http", "both"}:
+            http_response = self._submit_http_telemetry(
+                payload,
+                correlation_id=correlation_id,
+                request_id=request_id,
+            )
+        if transport in {"mqtt", "both"}:
+            self._submit_mqtt_telemetry(
+                payload,
+                correlation_id=correlation_id,
+                request_id=request_id,
+            )
+        return http_response
+
+    def _submit_http_telemetry(
+        self,
+        payload: dict[str, Any],
+        *,
+        correlation_id: str | None,
+        request_id: str | None,
+    ) -> dict[str, Any] | None:
         metadata = {
             "payload": payload,
             "correlation_id": correlation_id,
@@ -151,6 +174,46 @@ class EdgeDeviceAgent:
             workflow_id = correlation_id or request_id or ""
             self.outbox.enqueue("telemetry", metadata, workflow_id=workflow_id)
             return None
+
+    def _submit_mqtt_telemetry(
+        self,
+        payload: dict[str, Any],
+        *,
+        correlation_id: str | None,
+        request_id: str | None,
+    ) -> None:
+        envelope = new_envelope(
+            device_id=self.config.device.id,
+            event_name="telemetry.reported",
+            payload=payload,
+            correlation_id=correlation_id,
+            request_id=request_id,
+        )
+        if self.mqtt is not None and self.mqtt.is_connected:
+            try:
+                self.mqtt.publish_telemetry_envelope(envelope)
+                return
+            except Exception as exc:
+                logger.exception(
+                    "MQTT telemetry publish failed; queueing message_id=%s: %s",
+                    envelope.message_id,
+                    exc,
+                )
+        else:
+            logger.warning(
+                "MQTT unavailable; queueing telemetry message_id=%s connected=%s",
+                envelope.message_id,
+                self.mqtt.is_connected if self.mqtt is not None else False,
+            )
+        self.outbox.enqueue(
+            "mqtt_telemetry",
+            {"envelope": envelope.to_dict()},
+            workflow_id=correlation_id or request_id or "",
+        )
+        logger.info(
+            "MQTT telemetry persisted to outbox: message_id=%s",
+            envelope.message_id,
+        )
 
     def handle_command(self, envelope: Envelope) -> None:
         logger.info(
@@ -244,16 +307,20 @@ class EdgeDeviceAgent:
                         correlation_id=job.get("correlation_id"),
                         metadata=job.get("metadata") or {},
                     )
-                elif record.kind == "mqtt_event":
+                elif record.kind in {"mqtt_event", "mqtt_telemetry"}:
                     if self.mqtt is None or not self.mqtt.is_connected:
                         raise RuntimeError("MQTT client is not connected")
                     logger.debug(
-                        "Retrying MQTT outbox event: record_id=%s event=%s message_id=%s",
+                        "Retrying MQTT outbox message: record_id=%s event=%s message_id=%s",
                         record.id,
                         record.payload["envelope"].get("event_name"),
                         record.payload["envelope"].get("message_id"),
                     )
-                    self.mqtt.publish_envelope(Envelope(**record.payload["envelope"]))
+                    envelope = Envelope(**record.payload["envelope"])
+                    if record.kind == "mqtt_telemetry":
+                        self.mqtt.publish_telemetry_envelope(envelope)
+                    else:
+                        self.mqtt.publish_envelope(envelope)
                 else:
                     self.outbox.mark_failed(
                         record,

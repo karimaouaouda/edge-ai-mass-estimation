@@ -242,23 +242,23 @@ The edge device SHOULD publish events to:
 drovenai/devices/{device_id}/events/{event_name}
 ```
 
-Current backend note: these event topics are the expected contract, and the Laravel app already has storage actions for inference results and MQTT traces. A long-running MQTT consumer is still needed to automatically process these inbound events.
+The Laravel app consumes these topics through `php artisan mqtt:consume`. It validates the topic and envelope identity, records an MQTT trace, and dispatches supported events to domain actions.
 
 Recommended edge event names:
 
 | Topic suffix | `event_name` | Purpose | Backend target |
 | --- | --- | --- | --- |
 | `events/inference.result` | `inference.result` | Inference completed successfully | `StoreInferenceResultAction` |
-| `events/inference.failed` | `inference.failed` | Inference failed | Future failure handler |
-| `events/preview.ready` | `preview.ready` | Edge reserved camera and can accept WebRTC signaling | Future preview state handler |
-| `events/preview.webrtc_answer` | `preview.webrtc_answer` | Edge WebRTC SDP answer | Future preview signaling handler |
-| `events/preview.webrtc_ice_candidate` | `preview.webrtc_ice_candidate` | Edge ICE candidate | Future preview signaling handler |
-| `events/preview.started` | `preview.started` | Preview stream active | Future preview state handler |
-| `events/preview.stopped` | `preview.stopped` | Preview stream stopped | Future preview state handler |
-| `events/preview.failed` | `preview.failed` | Preview failed to start or continue | Future preview state handler |
-| `events/model_deployment.started` | `model_deployment.started` | Deployment started | Future deployment state handler |
-| `events/model_deployment.succeeded` | `model_deployment.succeeded` | Deployment succeeded | Future deployment state handler |
-| `events/model_deployment.failed` | `model_deployment.failed` | Deployment failed | Future deployment state handler |
+| `events/inference.failed` | `inference.failed` | Inference failed | `FailInferenceJobAction` |
+| `events/preview.ready` | `preview.ready` | Edge reserved camera and can accept WebRTC signaling | `ApplyPreviewEventAction` |
+| `events/preview.webrtc_answer` | `preview.webrtc_answer` | Edge WebRTC SDP answer | `ApplyPreviewEventAction` |
+| `events/preview.webrtc_ice_candidate` | `preview.webrtc_ice_candidate` | Edge ICE candidate | `ApplyPreviewEventAction` |
+| `events/preview.started` | `preview.started` | Preview stream active | `ApplyPreviewEventAction` |
+| `events/preview.stopped` | `preview.stopped` | Preview stream stopped | `ApplyPreviewEventAction` |
+| `events/preview.failed` | `preview.failed` | Preview failed to start or continue | `ApplyPreviewEventAction` |
+| `events/model_deployment.started` | `model_deployment.started` | Deployment started | `ApplyModelDeploymentEventAction` |
+| `events/model_deployment.succeeded` | `model_deployment.succeeded` | Deployment succeeded | `ApplyModelDeploymentEventAction` |
+| `events/model_deployment.failed` | `model_deployment.failed` | Deployment failed | `ApplyModelDeploymentEventAction` |
 | `events/device.error` | `device.error` | Device-level error | Future error/audit handler |
 
 Preview signaling events are detailed in `07-webrtc-preview-signaling.md`.
@@ -319,7 +319,7 @@ Topic:
 drovenai/devices/{device_id}/telemetry
 ```
 
-The topic exists in the backend topic builder. Current recommended transport for telemetry is HTTP because the implemented ingestion endpoint updates database state. MQTT telemetry can mirror the same JSON as the HTTP telemetry payload once a server consumer is added.
+MQTT telemetry uses the standard envelope with `event_name=telemetry.reported`. Its inner `payload` mirrors the HTTP telemetry body. The MQTT consumer dispatches it through `UpdateDeviceTelemetryAction`, so HTTP and MQTT update the same device state.
 
 ## Python MQTT example
 

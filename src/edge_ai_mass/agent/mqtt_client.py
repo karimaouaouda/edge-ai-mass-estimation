@@ -151,6 +151,34 @@ class EdgeMqttClient:
 
         self._publish_envelope(f"events/{envelope.event_name}", envelope)
 
+    def publish_telemetry(
+        self,
+        payload: dict[str, Any],
+        *,
+        correlation_id: str | None = None,
+        request_id: str | None = None,
+    ) -> Envelope:
+        """Publish a telemetry payload using the standard backend envelope."""
+
+        envelope = new_envelope(
+            device_id=self.config.device.id,
+            event_name="telemetry.reported",
+            payload=payload,
+            correlation_id=correlation_id,
+            request_id=request_id,
+        )
+        self.publish_telemetry_envelope(envelope)
+        return envelope
+
+    def publish_telemetry_envelope(self, envelope: Envelope) -> None:
+        """Publish a new or outbox-restored telemetry envelope."""
+
+        if envelope.event_name != "telemetry.reported":
+            raise MqttPublishError(
+                "MQTT telemetry envelope must use event_name='telemetry.reported'"
+            )
+        self._publish_envelope("telemetry", envelope)
+
     @property
     def is_started(self) -> bool:
         return self._client is not None

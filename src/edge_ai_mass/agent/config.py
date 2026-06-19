@@ -10,6 +10,8 @@ from edge_ai_mass import __version__
 from edge_ai_mass.agent.secrets import SecretStore, require_secret
 from edge_ai_mass.utils.config import load_config
 
+VALID_TELEMETRY_TRANSPORTS = {"http", "mqtt", "both"}
+
 
 @dataclass(frozen=True, slots=True)
 class DeviceSettings:
@@ -55,6 +57,7 @@ class RuntimeSettings:
     """Local runtime paths, intervals, and feature configuration."""
 
     telemetry_interval_seconds: float = 30.0
+    telemetry_transport: str = "http"
     media_upload_retries: int = 5
     outbox_path: Path = Path("/var/lib/drovenai-agent/outbox")
     model_dir: Path = Path("/var/lib/drovenai-agent/models")
@@ -103,7 +106,10 @@ class AgentConfig:
                     {"inference": True, "preview": True, "model_update": True},
                 )
             ),
-            active_models={str(k): str(v) for k, v in (device_raw.get("active_models") or {}).items()},
+            active_models={
+                str(key): str(value)
+                for key, value in (device_raw.get("active_models") or {}).items()
+            },
         )
 
         backend = BackendSettings(
@@ -128,8 +134,18 @@ class AgentConfig:
             qos=int(mqtt_raw.get("qos", 0)),
         )
 
+        telemetry_transport = str(
+            runtime_raw.get("telemetry_transport") or "http"
+        ).lower()
+        if telemetry_transport not in VALID_TELEMETRY_TRANSPORTS:
+            raise ValueError(
+                "runtime.telemetry_transport must be one of "
+                f"{sorted(VALID_TELEMETRY_TRANSPORTS)}, got {telemetry_transport!r}"
+            )
+
         runtime = RuntimeSettings(
             telemetry_interval_seconds=float(runtime_raw.get("telemetry_interval_seconds", 30)),
+            telemetry_transport=telemetry_transport,
             media_upload_retries=int(runtime_raw.get("media_upload_retries", 5)),
             outbox_path=_resolve_path(
                 runtime_raw.get("outbox_path", "/var/lib/drovenai-agent/outbox"),
@@ -143,7 +159,9 @@ class AgentConfig:
                 runtime_raw.get("media_dir", "/var/lib/drovenai-agent/media"),
                 base_dir,
             ),
-            pipeline_config=str(runtime_raw.get("pipeline_config") or "configs/pipeline/jetson_nano.yaml"),
+            pipeline_config=str(
+                runtime_raw.get("pipeline_config") or "configs/pipeline/jetson_nano.yaml"
+            ),
             camera_source=str(runtime_raw.get("camera_source") or "camera:0"),
             outbox_max_attempts=int(runtime_raw.get("outbox_max_attempts", 8)),
             outbox_retention_seconds=int(

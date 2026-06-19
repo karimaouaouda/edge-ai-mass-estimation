@@ -101,7 +101,7 @@ Payload:
 }
 ```
 
-Current backend note: the existing Laravel preview action sends `request_id`, `correlation_id`, `mode`, `camera_source`, and `ttl_seconds`. The `webrtc` object is the required extension for a production WebRTC preview implementation.
+The Laravel preview start action sends `request_id`, `correlation_id`, `mode`, `camera_source`, `ttl_seconds`, and the `webrtc` negotiation preferences. `PublishPreviewSignalAction` publishes offers and Laravel's MQTT consumer applies edge answers, ICE candidates, and lifecycle events to the preview session.
 
 Edge behavior:
 
@@ -416,4 +416,3 @@ The manager SHOULD keep session state keyed by `request_id`:
     "state": "ready|connecting|active|stopped|failed",
 }
 ```
-

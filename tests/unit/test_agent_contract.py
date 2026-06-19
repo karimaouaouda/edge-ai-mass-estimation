@@ -25,7 +25,10 @@ def test_agent_config_loads_identity_and_token_from_env(tmp_path):
                 "capabilities": {"inference": "true", "preview": "false"},
             },
             "backend": {"device_token_env": "TEST_DEVICE_TOKEN"},
-            "runtime": {"outbox_path": "outbox"},
+            "runtime": {
+                "outbox_path": "outbox",
+                "telemetry_transport": "mqtt",
+            },
         },
         base_dir=tmp_path,
     )
@@ -34,6 +37,7 @@ def test_agent_config_loads_identity_and_token_from_env(tmp_path):
     assert config.device.id == "jetson-nano-line-a-01"
     assert config.device.capabilities == {"inference": True, "preview": False}
     assert config.runtime.outbox_path == tmp_path / "outbox"
+    assert config.runtime.telemetry_transport == "mqtt"
     assert config.require_device_token(store) == "raw-token"
 
 
@@ -44,6 +48,14 @@ def test_agent_config_requires_device_id_and_http_token():
     config = AgentConfig.from_mapping({"device": {"id": "jetson-01"}})
     with pytest.raises(MissingSecretError):
         config.require_device_token(EnvironmentSecretStore({}))
+
+    with pytest.raises(ValueError, match="telemetry_transport"):
+        AgentConfig.from_mapping(
+            {
+                "device": {"id": "jetson-01"},
+                "runtime": {"telemetry_transport": "carrier-pigeon"},
+            }
+        )
 
 
 def test_envelope_round_trip_and_command_validation():
