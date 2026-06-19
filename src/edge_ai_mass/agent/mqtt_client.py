@@ -171,7 +171,7 @@ class EdgeMqttClient:
         self.on_command(envelope)
 
     def _publish_envelope(self, suffix: str, envelope: Envelope) -> None:
-        topic = self.topic(suffix)
+        topic = self.topic(suffix.replace(".", "/"))
         if self._client is None:
             logger.info(
                 "MQTT client is not connected; event not published on %s: %s",
