@@ -293,6 +293,7 @@ class PreviewManager:
         session: PreviewSession,
         payload: dict[str, Any],
     ) -> list[PreviewEvent]:
+        print(f"Handling offer for session {session.request_id} with payload: {payload}")
         peer_id = str(payload.get("peer_id") or "")
         offer_sdp = str(payload.get("sdp") or "")
         metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
