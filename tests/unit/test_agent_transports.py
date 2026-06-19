@@ -7,10 +7,10 @@ import json
 import pytest
 
 from edge_ai_mass.agent.config import AgentConfig
-from edge_ai_mass.agent.http_client import EdgeHttpClient, HttpRequest, HttpResponse
-from edge_ai_mass.agent.mqtt_client import EdgeMqttClient
-from edge_ai_mass.agent.outbox import FileOutbox
 from edge_ai_mass.agent.envelopes import new_envelope
+from edge_ai_mass.agent.http_client import EdgeHttpClient, HttpRequest, HttpResponse
+from edge_ai_mass.agent.mqtt_client import EdgeMqttClient, MqttPublishError
+from edge_ai_mass.agent.outbox import FileOutbox
 
 
 class RecordingTransport:
@@ -137,13 +137,21 @@ def test_file_outbox_retries_and_dead_letters(tmp_path):
 
 
 class FakePahoClient:
-    def __init__(self):
+    def __init__(self, *, publish_rc=0):
         self.published = []
+        self.publish_rc = publish_rc
 
     def publish(self, topic, payload, qos=0, retain=False):
         self.published.append(
             {"topic": topic, "payload": payload, "qos": qos, "retain": retain}
         )
+        return FakeMessageInfo(rc=self.publish_rc, mid=len(self.published))
+
+
+class FakeMessageInfo:
+    def __init__(self, *, rc, mid):
+        self.rc = rc
+        self.mid = mid
 
 
 def test_mqtt_dispatches_valid_commands_and_publishes_error_for_duplicate():
@@ -151,6 +159,7 @@ def test_mqtt_dispatches_valid_commands_and_publishes_error_for_duplicate():
     handled = []
     mqtt = EdgeMqttClient(config=config, on_command=handled.append)
     mqtt._client = FakePahoClient()
+    mqtt._connected.set()
 
     envelope = new_envelope(
         device_id="jetson-01",
@@ -169,3 +178,31 @@ def test_mqtt_dispatches_valid_commands_and_publishes_error_for_duplicate():
     payload = json.loads(mqtt._client.published[0]["payload"])
     assert payload["event_name"] == "device.error"
     assert payload["payload"]["error_type"] == "invalid_command"
+
+
+def test_mqtt_publish_preserves_dotted_backend_event_topic():
+    config = AgentConfig.from_mapping({"device": {"id": "jetson-01"}})
+    mqtt = EdgeMqttClient(config=config, on_command=lambda _envelope: None)
+    mqtt._client = FakePahoClient()
+    mqtt._connected.set()
+
+    envelope = mqtt.publish_event(
+        "preview.ready",
+        {"request_id": "request-1"},
+        correlation_id="correlation-1",
+        request_id="request-1",
+    )
+
+    published = mqtt._client.published[0]
+    assert published["topic"] == "drovenai/devices/jetson-01/events/preview.ready"
+    assert json.loads(published["payload"])["message_id"] == envelope.message_id
+
+
+def test_mqtt_publish_raises_when_paho_rejects_message():
+    config = AgentConfig.from_mapping({"device": {"id": "jetson-01"}})
+    mqtt = EdgeMqttClient(config=config, on_command=lambda _envelope: None)
+    mqtt._client = FakePahoClient(publish_rc=4)
+    mqtt._connected.set()
+
+    with pytest.raises(MqttPublishError, match="rc=4"):
+        mqtt.publish_event("device.error", {"error_type": "test"})

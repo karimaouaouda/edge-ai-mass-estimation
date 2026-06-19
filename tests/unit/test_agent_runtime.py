@@ -204,9 +204,20 @@ def test_preview_ttl_expiry_emits_stopped_event():
 
 class RecordingMqtt:
     is_started = True
+    is_connected = True
 
     def __init__(self):
         self.events = []
+
+    def publish_envelope(self, envelope):
+        self.events.append(
+            {
+                "event_name": envelope.event_name,
+                "payload": envelope.payload,
+                "correlation_id": envelope.correlation_id,
+                "request_id": envelope.request_id,
+            }
+        )
 
     def publish_event(self, event_name, payload, *, correlation_id=None, request_id=None):
         self.events.append(

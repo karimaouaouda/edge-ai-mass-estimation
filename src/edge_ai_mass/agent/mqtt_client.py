@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, Callable
 
 from edge_ai_mass.agent.config import AgentConfig
@@ -20,6 +21,10 @@ from edge_ai_mass.agent.envelopes import (
 logger = logging.getLogger(__name__)
 
 CommandHandler = Callable[[Envelope], None]
+
+
+class MqttPublishError(RuntimeError):
+    """Raised when an MQTT event cannot be queued for delivery."""
 
 
 class EdgeMqttClient:
@@ -40,6 +45,8 @@ class EdgeMqttClient:
         self.password = password
         self.deduper = deduper or MessageDeduper()
         self._client: Any = None
+        self._connected = threading.Event()
+        self._pending_publishes: dict[int, dict[str, str]] = {}
 
     @property
     def command_topic(self) -> str:
@@ -74,20 +81,51 @@ class EdgeMqttClient:
             client.tls_set()
 
         client.on_connect = self._on_connect
+        client.on_connect_fail = self._on_connect_fail
+        client.on_disconnect = self._on_disconnect
         client.on_message = self._on_message
-        client.connect(
+        client.on_publish = self._on_publish
+        client.on_subscribe = self._on_subscribe
+        client.on_log = self._on_log
+        client.reconnect_delay_set(min_delay=1, max_delay=30)
+        self._client = client
+
+        logger.info(
+            "Starting MQTT client: broker=%s:%s client_id=%s tls=%s qos=%s "
+            "username_configured=%s command_topic=%s",
             self.config.mqtt.host,
             self.config.mqtt.port,
-            keepalive=self.config.mqtt.keepalive_seconds,
+            self.config.mqtt.client_id,
+            self.config.mqtt.tls,
+            self.config.mqtt.qos,
+            bool(self.username),
+            self.command_topic,
         )
-        client.loop_start()
-        self._client = client
+        try:
+            result_code = client.connect(
+                self.config.mqtt.host,
+                self.config.mqtt.port,
+                keepalive=self.config.mqtt.keepalive_seconds,
+            )
+            logger.debug("MQTT connect() queued with rc=%s", result_code)
+            client.loop_start()
+        except Exception:
+            self._client = None
+            self._connected.clear()
+            logger.exception(
+                "MQTT startup failed for broker %s:%s",
+                self.config.mqtt.host,
+                self.config.mqtt.port,
+            )
+            raise
 
     def stop(self) -> None:
         if self._client is None:
             return
-        self._client.loop_stop()
+        logger.info("Stopping MQTT client %s", self.config.mqtt.client_id)
+        self._connected.clear()
         self._client.disconnect()
+        self._client.loop_stop()
         self._client = None
 
     def publish_event(
@@ -116,6 +154,12 @@ class EdgeMqttClient:
     @property
     def is_started(self) -> bool:
         return self._client is not None
+
+    @property
+    def is_connected(self) -> bool:
+        """Return whether the broker has accepted the current connection."""
+
+        return self._client is not None and self._connected.is_set()
 
     def publish_error(
         self,
@@ -152,7 +196,8 @@ class EdgeMqttClient:
                 deduper=self.deduper,
             )
             logger.info(
-                "Received MQTT command on %s: event=%s message_id=%s correlation_id=%s request_id=%s",
+                "Received MQTT command: topic=%s event=%s message_id=%s "
+                "correlation_id=%s request_id=%s",
                 topic,
                 envelope.event_name,
                 envelope.message_id,
@@ -171,27 +216,62 @@ class EdgeMqttClient:
         self.on_command(envelope)
 
     def _publish_envelope(self, suffix: str, envelope: Envelope) -> None:
-        topic = self.topic(suffix.replace(".", "/"))
+        topic = self.topic(suffix)
         if self._client is None:
-            logger.info(
-                "MQTT client is not connected; event not published on %s: %s",
-                topic,
-                envelope.event_name,
+            raise MqttPublishError(
+                f"MQTT client is not started; event {envelope.event_name!r} "
+                f"was not published to {topic}"
             )
-            return
-        logger.info(
-            "Publishing MQTT event on %s: event=%s message_id=%s correlation_id=%s request_id=%s",
+        if not self._connected.is_set():
+            raise MqttPublishError(
+                f"MQTT broker is not connected; event {envelope.event_name!r} "
+                f"was not published to {topic}"
+            )
+
+        encoded = envelope.to_json()
+        logger.debug(
+            "MQTT publish attempt: topic=%s event=%s message_id=%s qos=%s bytes=%s",
             topic,
             envelope.event_name,
             envelope.message_id,
-            envelope.correlation_id,
-            envelope.request_id,
+            self.config.mqtt.qos,
+            len(encoded.encode("utf-8")),
         )
-        self._client.publish(
+        result = self._client.publish(
             topic,
-            envelope.to_json(),
+            encoded,
             qos=self.config.mqtt.qos,
             retain=False,
+        )
+        result_code = int(getattr(result, "rc", 0))
+        message_id = int(getattr(result, "mid", 0))
+        if result_code != 0:
+            logger.error(
+                "MQTT publish rejected locally: topic=%s event=%s message_id=%s rc=%s mid=%s",
+                topic,
+                envelope.event_name,
+                envelope.message_id,
+                result_code,
+                message_id,
+            )
+            raise MqttPublishError(
+                f"MQTT publish failed with rc={result_code} for topic {topic}"
+            )
+
+        self._pending_publishes[message_id] = {
+            "topic": topic,
+            "event_name": envelope.event_name,
+            "message_id": envelope.message_id,
+        }
+        logger.info(
+            "MQTT publish queued: topic=%s event=%s message_id=%s mid=%s "
+            "correlation_id=%s request_id=%s",
+            topic,
+            envelope.event_name,
+            envelope.message_id,
+            message_id,
+            envelope.correlation_id,
+            envelope.request_id,
         )
 
     def _on_connect(
@@ -203,15 +283,142 @@ class EdgeMqttClient:
         *_extra: Any,
     ) -> None:
         try:
-            print(f"Connected to MQTT broker with reason code: {reason_code}")
-            if reason_code != "Success":
-                logger.error("MQTT connection failed with rc=%s", reason_code)
+            numeric_reason = _reason_code_value(reason_code)
+            if numeric_reason != 0:
+                self._connected.clear()
+                logger.error(
+                    "MQTT connection rejected: broker=%s:%s client_id=%s reason=%s value=%s",
+                    self.config.mqtt.host,
+                    self.config.mqtt.port,
+                    self.config.mqtt.client_id,
+                    reason_code,
+                    numeric_reason,
+                )
                 return
-            client.subscribe(self.command_topic, qos=self.config.mqtt.qos)
-            logger.info("Subscribed to backend MQTT commands on %s", self.command_topic)
+            self._connected.set()
+            logger.info(
+                "MQTT connected: broker=%s:%s client_id=%s reason=%s",
+                self.config.mqtt.host,
+                self.config.mqtt.port,
+                self.config.mqtt.client_id,
+                reason_code,
+            )
+            subscribe_result = client.subscribe(
+                self.command_topic,
+                qos=self.config.mqtt.qos,
+            )
+            subscribe_code, subscribe_mid = _subscribe_result(subscribe_result)
+            if subscribe_code != 0:
+                logger.error(
+                    "MQTT subscription failed: topic=%s rc=%s mid=%s",
+                    self.command_topic,
+                    subscribe_code,
+                    subscribe_mid,
+                )
+                return
+            logger.info(
+                "MQTT subscription queued: topic=%s qos=%s mid=%s",
+                self.command_topic,
+                self.config.mqtt.qos,
+                subscribe_mid,
+            )
         except Exception as exc:
-            logger.error("Error in MQTT on_connect handler: %s", exc)
+            self._connected.clear()
+            logger.exception("Error in MQTT on_connect handler: %s", exc)
 
     def _on_message(self, _client: Any, _userdata: Any, message: Any) -> None:
-        print(f"Received MQTT message on {message.topic}: {message.payload}")
+        logger.debug(
+            "MQTT message received: topic=%s qos=%s retain=%s bytes=%s",
+            message.topic,
+            getattr(message, "qos", None),
+            getattr(message, "retain", None),
+            len(message.payload),
+        )
         self.handle_message(str(message.topic), message.payload)
+
+    def _on_publish(
+        self,
+        _client: Any,
+        _userdata: Any,
+        mid: int,
+        reason_code: Any = None,
+        *_extra: Any,
+    ) -> None:
+        details = self._pending_publishes.pop(int(mid), {})
+        logger.info(
+            "MQTT publish completed: topic=%s event=%s message_id=%s mid=%s reason=%s",
+            details.get("topic", "unknown"),
+            details.get("event_name", "unknown"),
+            details.get("message_id", "unknown"),
+            mid,
+            reason_code,
+        )
+
+    def _on_subscribe(
+        self,
+        _client: Any,
+        _userdata: Any,
+        mid: int,
+        reason_codes: Any = None,
+        *_extra: Any,
+    ) -> None:
+        logger.info(
+            "MQTT subscription acknowledged: topic=%s mid=%s reason_codes=%s",
+            self.command_topic,
+            mid,
+            reason_codes,
+        )
+
+    def _on_connect_fail(self, _client: Any, _userdata: Any) -> None:
+        self._connected.clear()
+        logger.error(
+            "MQTT TCP connection failed: broker=%s:%s client_id=%s",
+            self.config.mqtt.host,
+            self.config.mqtt.port,
+            self.config.mqtt.client_id,
+        )
+
+    def _on_disconnect(self, _client: Any, _userdata: Any, *args: Any) -> None:
+        self._connected.clear()
+        reason_code = _disconnect_reason(args)
+        numeric_reason = _reason_code_value(reason_code)
+        log = logger.info if numeric_reason == 0 else logger.warning
+        log(
+            "MQTT disconnected: broker=%s:%s client_id=%s reason=%s value=%s",
+            self.config.mqtt.host,
+            self.config.mqtt.port,
+            self.config.mqtt.client_id,
+            reason_code,
+            numeric_reason,
+        )
+
+    def _on_log(
+        self,
+        _client: Any,
+        _userdata: Any,
+        level: Any,
+        message: str,
+    ) -> None:
+        logger.debug("Paho MQTT: level=%s message=%s", level, message)
+
+
+def _reason_code_value(reason_code: Any) -> int:
+    value = getattr(reason_code, "value", reason_code)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0 if str(reason_code).lower() == "success" else -1
+
+
+def _subscribe_result(result: Any) -> tuple[int, int]:
+    if isinstance(result, tuple) and len(result) >= 2:
+        return int(result[0]), int(result[1])
+    return int(getattr(result, "rc", -1)), int(getattr(result, "mid", 0))
+
+
+def _disconnect_reason(args: tuple[Any, ...]) -> Any:
+    if len(args) >= 2:
+        return args[1]
+    if args:
+        return args[0]
+    return "unknown"

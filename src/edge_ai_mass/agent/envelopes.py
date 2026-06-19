@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from collections import OrderedDict
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 COMMAND_EVENT_BY_SUFFIX = {
@@ -117,9 +120,9 @@ def new_envelope(
 ) -> Envelope:
     """Build a new outbound MQTT envelope while preserving workflow ids."""
 
-    payload = payload or {}
+    if payload is None:
+        payload = {}
     if not isinstance(payload, dict):
-        print(f"Invalid payload type: {type(payload)}. Payload must be a dictionary. ({payload})")
         raise EnvelopeError("Envelope payload must be a JSON object")
     workflow_correlation_id = correlation_id or payload.get("correlation_id") or str(uuid.uuid4())
     workflow_request_id = request_id if request_id is not None else payload.get("request_id")
@@ -138,42 +141,39 @@ def parse_envelope(raw: bytes | str | dict[str, Any]) -> Envelope:
     """Parse and minimally validate a JSON MQTT envelope."""
 
     if isinstance(raw, bytes):
+        logger.debug("Parsing MQTT envelope from bytes: size=%s", len(raw))
         raw = raw.decode("utf-8")
-        print(f"Received envelope as bytes: {raw}")
     if isinstance(raw, str):
         try:
-            print(f"Parsing envelope from JSON string: {raw}")
             data = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise CommandValidationError("Payload is not valid JSON") from exc
     else:
-        print(f"Parsing envelope from dict: {raw}")
         data = raw
 
     if not isinstance(data, dict):
         raise CommandValidationError("Envelope must be a JSON object")
 
-    payload = data.get("payload") or data
+    payload = data.get("payload")
     if not isinstance(payload, dict):
-        print(f"Invalid payload type: {type(payload)}. Payload must be a dictionary. ({payload})")
         raise CommandValidationError(
             "Envelope payload must be a JSON object",
-            source_message_id=_string_or_none(data.get("request_id")),
+            source_message_id=_string_or_none(data.get("message_id")),
             field="payload",
         )
 
-    required = ["request_id", "correlation_id", "event_name", "device_id", "issued_at"]
+    required = ["message_id", "correlation_id", "event_name", "device_id", "issued_at"]
     for field_name in required:
         if not str(data.get(field_name) or "").strip():
             raise CommandValidationError(
                 f"Envelope missing required field: {field_name}",
-                source_message_id=_string_or_none(data.get("request_id")),
+                source_message_id=_string_or_none(data.get("message_id")),
                 field=field_name,
             )
 
     request_id = data.get("request_id")
     return Envelope(
-        message_id=str(data["request_id"]),
+        message_id=str(data["message_id"]),
         correlation_id=str(data["correlation_id"]),
         request_id=str(request_id) if request_id is not None else None,
         event_name=str(data["event_name"]),
