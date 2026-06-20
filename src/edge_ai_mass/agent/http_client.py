@@ -185,6 +185,7 @@ class EdgeHttpClient:
 
     def _url(self, suffix: str) -> str:
         device_id = urllib.parse.quote(self.device_id, safe="")
+        print(f"Constructing URL for device_id: {device_id} with suffix: {suffix} : {self.base_url}/api/edge/devices/{device_id}/{suffix}")
         return f"{self.base_url}/api/edge/devices/{device_id}/{suffix}"
 
 
