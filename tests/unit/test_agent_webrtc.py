@@ -8,13 +8,14 @@ import pytest
 from edge_ai_mass.agent.camera import video_capture_spec
 from edge_ai_mass.agent.config import AgentConfig
 from edge_ai_mass.agent.preview import (
+    DeferredAiortcPreviewPeerFactory,
     PreviewError,
     PreviewManager,
     PreviewPeerEvent,
     WebRTCAnswer,
 )
 from edge_ai_mass.agent.runner import EdgeDeviceAgent
-from edge_ai_mass.agent.webrtc import AiortcPreviewPeerFactory, _resize_to_bounds
+from edge_ai_mass.agent.webrtc import _resize_to_bounds
 
 
 class DeferredPeer:
@@ -173,7 +174,7 @@ def test_failed_offer_cleans_up_session():
     assert peer.closed is True
 
 
-def test_device_agent_uses_aiortc_peer_factory_by_default():
+def test_device_agent_defers_aiortc_import_until_preview_is_requested():
     config = AgentConfig.from_mapping({"device": {"id": "jetson-01"}})
 
     agent = EdgeDeviceAgent(
@@ -181,7 +182,10 @@ def test_device_agent_uses_aiortc_peer_factory_by_default():
         preview_camera_available=lambda _source: True,
     )
 
-    assert isinstance(agent.preview_manager.peer_factory, AiortcPreviewPeerFactory)
+    assert isinstance(
+        agent.preview_manager.peer_factory,
+        DeferredAiortcPreviewPeerFactory,
+    )
 
 
 def test_frame_resize_preserves_aspect_ratio():

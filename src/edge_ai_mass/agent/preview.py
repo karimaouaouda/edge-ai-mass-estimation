@@ -142,6 +142,15 @@ class SimulatedPreviewPeerFactory:
         return SimulatedPreviewPeer()
 
 
+class DeferredAiortcPreviewPeerFactory:
+    """Import the optional WebRTC native stack only when preview is requested."""
+
+    def __call__(self, session: "PreviewSession") -> PreviewPeer:
+        from edge_ai_mass.agent.webrtc import AiortcPreviewPeerFactory
+
+        return AiortcPreviewPeerFactory()(session)
+
+
 @dataclass(slots=True)
 class PreviewSession:
     """State for one backend-owned preview session."""

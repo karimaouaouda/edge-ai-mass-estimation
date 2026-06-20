@@ -403,6 +403,52 @@ class FixedTelemetry:
         }
 
 
+def test_agent_preloads_inference_before_starting_mqtt(tmp_path):
+    startup_order = []
+    preloaded_runner = object()
+
+    class StartableMqtt(RecordingMqtt):
+        def __init__(self):
+            super().__init__()
+            self.is_started = False
+            self.is_connected = False
+
+        def start(self):
+            startup_order.append("mqtt")
+            self.is_started = True
+            self.is_connected = True
+
+    def load_inference():
+        startup_order.append("inference")
+        return preloaded_runner
+
+    config = AgentConfig.from_mapping(
+        {
+            "device": {"id": "jetson-01", "capabilities": {"inference": True}},
+            "runtime": {
+                "telemetry_transport": "mqtt",
+                "outbox_path": str(tmp_path),
+            },
+        }
+    )
+    mqtt = StartableMqtt()
+    agent = EdgeDeviceAgent(
+        config,
+        http_client=object(),
+        mqtt_client=mqtt,
+        telemetry=FixedTelemetry(),
+        inference_runner_factory=load_inference,
+    )
+
+    agent.start()
+
+    assert startup_order == ["inference", "mqtt"]
+    assert agent._inference_runner is preloaded_runner
+    assert agent._get_inference_runner() is preloaded_runner
+    assert startup_order == ["inference", "mqtt"]
+    assert len(mqtt.telemetry_envelopes) == 1
+
+
 class SuccessfulInferenceRunner:
     def run_command(
         self,

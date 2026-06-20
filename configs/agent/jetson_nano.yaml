@@ -45,6 +45,8 @@ runtime:
   model_dir: ${DROVENAI_MODEL_DIR:.edge_ai_mass/agent/models}
   media_dir: ${DROVENAI_MEDIA_DIR:.edge_ai_mass/agent/media}
   pipeline_config: ${EDGE_AI_PIPELINE_CONFIG:configs/pipeline/jetson_nano.yaml}
+  # Load Torch/TensorRT and all configured models before the MQTT thread starts.
+  preload_inference: ${DROVENAI_PRELOAD_INFERENCE:true}
   camera_source: ${EDGE_AI_CAMERA_SOURCE:camera:0}
   outbox_max_attempts: ${DROVENAI_OUTBOX_MAX_ATTEMPTS:8}
   outbox_retention_seconds: ${DROVENAI_OUTBOX_RETENTION_SECONDS:604800}

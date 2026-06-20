@@ -65,6 +65,7 @@ class RuntimeSettings:
     model_dir: Path = Path("/var/lib/drovenai-agent/models")
     media_dir: Path = Path("/var/lib/drovenai-agent/media")
     pipeline_config: str = "configs/pipeline/jetson_nano.yaml"
+    preload_inference: bool = True
     camera_source: str = "camera:0"
     outbox_max_attempts: int = 8
     outbox_retention_seconds: int = 7 * 24 * 60 * 60
@@ -172,6 +173,7 @@ class AgentConfig:
             pipeline_config=str(
                 runtime_raw.get("pipeline_config") or "configs/pipeline/jetson_nano.yaml"
             ),
+            preload_inference=_as_bool(runtime_raw.get("preload_inference", True)),
             camera_source=str(runtime_raw.get("camera_source") or "camera:0"),
             outbox_max_attempts=int(runtime_raw.get("outbox_max_attempts", 8)),
             outbox_retention_seconds=int(

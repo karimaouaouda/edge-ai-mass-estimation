@@ -19,6 +19,7 @@ from edge_ai_mass.agent.model_manager import ModelDeploymentError, ModelManager
 from edge_ai_mass.agent.mqtt_client import EdgeMqttClient
 from edge_ai_mass.agent.outbox import FileOutbox
 from edge_ai_mass.agent.preview import (
+    DeferredAiortcPreviewPeerFactory,
     PreviewError,
     PreviewManager,
     SimulatedPreviewPeerFactory,
@@ -78,6 +79,7 @@ class EdgeDeviceAgent:
     def start(self) -> None:
         """Initialize network clients and send the first telemetry payload."""
 
+        self._preload_inference_runtime()
         self.outbox.start()
         if self.http is None:
             token = self.config.require_device_token(self.secret_store)
@@ -103,6 +105,7 @@ class EdgeDeviceAgent:
                 username=username,
                 password=password,
             )
+        if not self.mqtt.is_started:
             self.mqtt.start()
         self.send_telemetry(status="online")
 
@@ -609,9 +612,7 @@ class EdgeDeviceAgent:
         if self.config.runtime.preview_backend == "simulated":
             peer_factory = SimulatedPreviewPeerFactory()
         else:
-            from edge_ai_mass.agent.webrtc import AiortcPreviewPeerFactory
-
-            peer_factory = AiortcPreviewPeerFactory()
+            peer_factory = DeferredAiortcPreviewPeerFactory()
         return PreviewManager(
             peer_factory=peer_factory,
             camera_available=camera_probe,
@@ -728,6 +729,42 @@ class EdgeDeviceAgent:
 
         print("Inference runner initialized")
         return self._inference_runner
+
+    def _preload_inference_runtime(self) -> None:
+        if not self.config.runtime.preload_inference:
+            logger.warning(
+                "Inference preloading is disabled; native model libraries may load on first use"
+            )
+            return
+        if not self.config.device.capabilities.get("inference", False):
+            logger.info("Inference preloading skipped because the device capability is disabled")
+            return
+        if self._inference_runner is not None:
+            return
+
+        started = time.perf_counter()
+        logger.info(
+            "Preloading inference runtime before MQTT startup: pipeline_config=%s",
+            self.config.runtime.pipeline_config,
+        )
+        try:
+            self._get_inference_runner()
+        except Exception as exc:
+            if "static TLS block" in str(exc):
+                logger.error(
+                    "The platform loader could not reserve static TLS for a model library. "
+                    "If eager loading is still too late on this Jetson image, preload the "
+                    "Torch-bundled libgomp with LD_PRELOAD before starting Python."
+                )
+            logger.exception(
+                "Inference runtime preload failed; MQTT will not start with an unready pipeline"
+            )
+            raise
+        logger.info(
+            "Inference runtime ready before MQTT startup: load_time_ms=%.1f active_models=%s",
+            (time.perf_counter() - started) * 1000.0,
+            self.active_models,
+        )
 
     def _install_signal_handlers(self) -> None:
         def _request_stop(_signum: int, _frame: object) -> None:

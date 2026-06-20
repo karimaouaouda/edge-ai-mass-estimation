@@ -38,6 +38,7 @@ def test_agent_config_loads_identity_and_token_from_env(tmp_path):
     assert config.device.capabilities == {"inference": True, "preview": False}
     assert config.runtime.outbox_path == tmp_path / "outbox"
     assert config.runtime.telemetry_transport == "mqtt"
+    assert config.runtime.preload_inference is True
     assert config.require_device_token(store) == "raw-token"
 
 
