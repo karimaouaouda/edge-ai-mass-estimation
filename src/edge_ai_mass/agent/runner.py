@@ -718,7 +718,9 @@ class EdgeDeviceAgent:
                 from edge_ai_mass.pipeline.factory import build_pipeline
 
                 pipeline = build_pipeline(self.config.runtime.pipeline_config)
+                print("Loading inference pipeline...")
                 pipeline.load_all()
+                print("Inference pipeline loaded")
                 self._inference_runner = InferenceRunner(
                     pipeline=pipeline,
                     active_models=self.active_models,
