@@ -22,6 +22,7 @@ def _instantiate_module(spec: dict[str, Any]) -> BaseModule:
     """Dynamically import and instantiate a module from its dotted class path."""
     class_path: str = spec["class"]
     module_path, class_name = class_path.rsplit(".", 1)
+    print(f"Instantiating module: {class_path} with params: {spec.get('params', {})}")
     mod = importlib.import_module(module_path)
     cls = getattr(mod, class_name)
     return cls(config=spec.get("params", {}))
