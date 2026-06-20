@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
+import sys
 from typing import Any
 
 from edge_ai_mass.modules.base import BaseModule
@@ -18,8 +20,20 @@ from edge_ai_mass.utils.config import load_config
 logger = logging.getLogger(__name__)
 
 
+def show_env() -> None:
+    print("python =", sys.executable)
+    print("cwd =", os.getcwd())
+    print("USER =", os.environ.get("USER"))
+    print("CONDA_PREFIX =", os.environ.get("CONDA_PREFIX"))
+    print("LD_PRELOAD =", os.environ.get("LD_PRELOAD"))
+    print("LD_LIBRARY_PATH =", os.environ.get("LD_LIBRARY_PATH"))
+    print("PATH =", os.environ.get("PATH"))
+
+
 def _instantiate_module(spec: dict[str, Any]) -> BaseModule:
     """Dynamically import and instantiate a module from its dotted class path."""
+
+    show_env()
     class_path: str = spec["class"]
     module_path, class_name = class_path.rsplit(".", 1)
     print(f"Instantiating module: {class_path} with params: {spec.get('params', {})}")
