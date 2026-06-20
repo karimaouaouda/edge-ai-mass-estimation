@@ -46,6 +46,7 @@ class YOLODetector(BaseModule):
     def load(self) -> None:
         from ultralytics import YOLO
 
+        print(f"Loading YOLO model from {self.model_path}")
         logger.info("Loading YOLO model from %s", self.model_path)
         self._model = YOLO(self.model_path, task="segment")
         self._is_loaded = True
