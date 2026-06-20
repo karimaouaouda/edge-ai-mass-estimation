@@ -47,7 +47,7 @@ class YOLODetector(BaseModule):
         from ultralytics import YOLO
 
         logger.info("Loading YOLO model from %s", self.model_path)
-        self._model = YOLO(self.model_path)
+        self._model = YOLO(self.model_path, task="segment")
         self._is_loaded = True
 
     def _forward(self, image: np.ndarray, **kwargs: Any) -> list[Detection]:
