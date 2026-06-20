@@ -106,10 +106,9 @@ class EdgeHttpClient:
         """Submit heartbeat/resource state to Laravel."""
 
         body = json.dumps(payload).encode("utf-8")
-        print(f"Submitting telemetry to {self._url('telemetry')} with payload: {payload}")
         request = HttpRequest(
             method="POST",
-            url=self._url('telemetry'),
+            url=self._url("telemetry"),
             headers={
                 "Accept": "application/json",
                 "Content-Type": "application/json",
@@ -186,7 +185,6 @@ class EdgeHttpClient:
 
     def _url(self, suffix: str) -> str:
         device_id = urllib.parse.quote(self.device_id, safe="")
-        print(f"Constructing URL for device_id: {device_id} with suffix: {suffix} : {self.base_url}/api/edge/devices/{device_id}/{suffix}")
         return f"{self.base_url}/api/edge/devices/{device_id}/{suffix}"
 
 
