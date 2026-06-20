@@ -15,7 +15,7 @@ It describes how an edge device connects to the Laravel supervision backend, whi
 - Production MQTT auth target: per-device broker username/password and ACLs
 - Current implemented HTTP endpoints: telemetry ingest and media upload
 - Current implemented Laravel-to-device MQTT commands: inference, preview start, preview signaling, preview stop, model deployment
-- Current inbound MQTT server consumer: `php artisan mqtt:consume`, which validates envelopes, records traces, and dispatches supported domain events.
+- Current inbound MQTT server consumer: the `mqtt.consumer` Compose service runs `php artisan mqtt:consume`, validates envelopes, records traces, and dispatches supported domain events.
 
 ## How an AI agent should use these files
 

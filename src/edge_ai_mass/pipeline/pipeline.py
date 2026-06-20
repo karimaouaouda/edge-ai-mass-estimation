@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 import cv2
 import numpy as np
@@ -102,6 +102,18 @@ class PipelineResult:
         if include_depth_map and self.depth_map is not None:
             payload["depth_map"] = self.depth_map.astype(float).tolist()
         return payload
+
+
+@dataclass(frozen=True, slots=True)
+class PipelineStageUpdate:
+    """Observable state change from one stage of the inference cascade."""
+
+    stage_key: str
+    status: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+PipelineStageCallback = Callable[[PipelineStageUpdate], None]
 
 
 # ------------------------------------------------------------------
@@ -189,77 +201,155 @@ class Pipeline:
     # ------------------------------------------------------------------
     # Inference
     # ------------------------------------------------------------------
-    def run(self, image: np.ndarray) -> PipelineResult:
+    def run(
+        self,
+        image: np.ndarray,
+        *,
+        stage_callback: PipelineStageCallback | None = None,
+    ) -> PipelineResult:
         t0 = time.perf_counter()
         result = PipelineResult()
         latencies: dict[str, float] = {}
 
         # 1. Detection ---------------------------------------------------
-        det_result = self.stages["detection"].run(image)
+        _notify_stage(stage_callback, "object-detection", "running")
+        try:
+            det_result = self.stages["detection"].run(image)
+        except Exception as exc:
+            _notify_stage(
+                stage_callback,
+                "object-detection",
+                "failed",
+                {"error": str(exc)},
+            )
+            raise
         detections: list[Detection] = det_result.data
         latencies["detection"] = det_result.latency_ms
+        _notify_stage(
+            stage_callback,
+            "object-detection",
+            "completed",
+            {
+                "latency_ms": float(det_result.latency_ms),
+                "object_count": len(detections),
+                "module": det_result.metadata.get("source"),
+            },
+        )
 
         if not detections:
+            skipped = {"skipped": True, "reason": "no_objects_detected"}
+            _notify_stage(stage_callback, "depth-estimation", "running", skipped)
+            _notify_stage(stage_callback, "depth-estimation", "completed", skipped)
+            _notify_stage(stage_callback, "mass-estimation", "running", skipped)
+            _notify_stage(stage_callback, "mass-estimation", "completed", skipped)
             result.latency_ms = latencies
             result.frame_time_ms = (time.perf_counter() - t0) * 1000
             return result
 
         # 2. Depth --------------------------------------------------------
-        depth_result = self.stages["depth"].run(image)
-        raw_depth_map: np.ndarray = depth_result.data
-        valid_depth_mask = None
-        if self.geometry_estimator is not None:
-            depth_map, valid_depth_mask = self.geometry_estimator.metric_depth(raw_depth_map)
-        else:
-            depth_map = raw_depth_map
-        result.depth_map = depth_map
-        latencies["depth"] = depth_result.latency_ms
+        _notify_stage(stage_callback, "depth-estimation", "running")
+        try:
+            depth_result = self.stages["depth"].run(image)
+            raw_depth_map: np.ndarray = depth_result.data
+            valid_depth_mask = None
+            if self.geometry_estimator is not None:
+                depth_map, valid_depth_mask = self.geometry_estimator.metric_depth(raw_depth_map)
+            else:
+                depth_map = raw_depth_map
+            result.depth_map = depth_map
+            latencies["depth"] = depth_result.latency_ms
+        except Exception as exc:
+            _notify_stage(
+                stage_callback,
+                "depth-estimation",
+                "failed",
+                {"error": str(exc)},
+            )
+            raise
+        _notify_stage(
+            stage_callback,
+            "depth-estimation",
+            "completed",
+            {
+                "latency_ms": float(depth_result.latency_ms),
+                "module": depth_result.metadata.get("source"),
+            },
+        )
 
         # 3. Per-object mass estimation -----------------------------------
-        mass_stage = self.stages["mass"]
-        mass_latency_ms = 0.0
-        for det in detections:
-            obj = ObjectEstimate(detection=det)
+        _notify_stage(
+            stage_callback,
+            "mass-estimation",
+            "running",
+            {"object_count": len(detections)},
+        )
+        try:
+            mass_stage = self.stages["mass"]
+            mass_latency_ms = 0.0
+            mass_sources: set[str] = set()
+            for det in detections:
+                obj = ObjectEstimate(detection=det)
 
-            # Extract depth stats inside the mask / bbox
-            obj.depth_stats = _depth_stats_for_detection(depth_map, det)
-            if self.geometry_estimator is not None:
-                geometry = self.geometry_estimator.estimate(
-                    det,
-                    depth_map,
-                    image.shape,
-                    valid_depth_mask=valid_depth_mask,
-                )
-                obj.geometry = geometry.to_dict()
-                obj.volume_m3 = geometry.volume_m3
-                obj.volume_method = geometry.method
-                obj.calibration_id = geometry.calibration_id
-                obj.depth_scale_id = geometry.depth_scale_id
-                obj.background_id = geometry.background_id
-                obj.warnings.extend(geometry.warnings)
+                # Extract depth stats inside the mask / bbox
+                obj.depth_stats = _depth_stats_for_detection(depth_map, det)
+                if self.geometry_estimator is not None:
+                    geometry = self.geometry_estimator.estimate(
+                        det,
+                        depth_map,
+                        image.shape,
+                        valid_depth_mask=valid_depth_mask,
+                    )
+                    obj.geometry = geometry.to_dict()
+                    obj.volume_m3 = geometry.volume_m3
+                    obj.volume_method = geometry.method
+                    obj.calibration_id = geometry.calibration_id
+                    obj.depth_scale_id = geometry.depth_scale_id
+                    obj.background_id = geometry.background_id
+                    obj.warnings.extend(geometry.warnings)
 
-            # Mass module expects a feature dict
-            features = {
-                "bbox": det.bbox,
-                "mask": det.mask,
-                "class_id": det.class_id,
-                "class_name": det.class_name,
-                "depth_stats": obj.depth_stats,
-                "geometry": obj.geometry,
-                "volume_m3": obj.volume_m3,
-                "image_crop": _crop(image, det.bbox),
-            }
-            mass_result = mass_stage.run(image, features=features)
-            obj.mass_kg = mass_result.data.get("mass_kg")
-            obj.volume_m3 = mass_result.data.get("volume_m3", obj.volume_m3)
-            obj.volume_method = mass_result.data.get("volume_method", obj.volume_method)
-            obj.material = mass_result.data.get("material")
-            obj.mass_method = mass_result.metadata.get("method", "unknown")
-            obj.warnings.extend(mass_result.data.get("warnings", []))
-            result.objects.append(obj)
-            mass_latency_ms += mass_result.latency_ms
+                # Mass module expects a feature dict
+                features = {
+                    "bbox": det.bbox,
+                    "mask": det.mask,
+                    "class_id": det.class_id,
+                    "class_name": det.class_name,
+                    "depth_stats": obj.depth_stats,
+                    "geometry": obj.geometry,
+                    "volume_m3": obj.volume_m3,
+                    "image_crop": _crop(image, det.bbox),
+                }
+                mass_result = mass_stage.run(image, features=features)
+                obj.mass_kg = mass_result.data.get("mass_kg")
+                obj.volume_m3 = mass_result.data.get("volume_m3", obj.volume_m3)
+                obj.volume_method = mass_result.data.get("volume_method", obj.volume_method)
+                obj.material = mass_result.data.get("material")
+                obj.mass_method = mass_result.metadata.get("method", "unknown")
+                obj.warnings.extend(mass_result.data.get("warnings", []))
+                result.objects.append(obj)
+                mass_latency_ms += mass_result.latency_ms
+                source = mass_result.metadata.get("source")
+                if source:
+                    mass_sources.add(str(source))
+        except Exception as exc:
+            _notify_stage(
+                stage_callback,
+                "mass-estimation",
+                "failed",
+                {"error": str(exc), "completed_objects": len(result.objects)},
+            )
+            raise
 
         latencies["mass"] = mass_latency_ms
+        _notify_stage(
+            stage_callback,
+            "mass-estimation",
+            "completed",
+            {
+                "latency_ms": float(mass_latency_ms),
+                "object_count": len(result.objects),
+                "modules": sorted(mass_sources),
+            },
+        )
         result.latency_ms = latencies
         result.frame_time_ms = (time.perf_counter() - t0) * 1000
         return result
@@ -268,6 +358,16 @@ class Pipeline:
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+def _notify_stage(
+    callback: PipelineStageCallback | None,
+    stage_key: str,
+    status: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    if callback is not None:
+        callback(PipelineStageUpdate(stage_key, status, metadata or {}))
+
+
 def _crop(image: np.ndarray, bbox: np.ndarray) -> np.ndarray:
     x1, y1, x2, y2 = bbox.astype(int)
     return image[y1:y2, x1:x2]

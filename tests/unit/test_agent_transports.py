@@ -136,6 +136,40 @@ def test_file_outbox_retries_and_dead_letters(tmp_path):
     assert len(list((tmp_path / "dead").glob("*.json"))) == 1
 
 
+def test_file_outbox_preserves_enqueue_order_for_same_workflow_timestamp(tmp_path):
+    outbox = FileOutbox(tmp_path)
+    first = outbox.enqueue("mqtt_event", {"event": "stage"}, now=100.0)
+    second = outbox.enqueue("mqtt_event", {"event": "result"}, now=100.0)
+
+    assert [record.id for record in outbox.due_records(now=100.0)] == [
+        first.id,
+        second.id,
+    ]
+
+
+def test_file_outbox_blocks_later_mqtt_event_while_predecessor_is_backing_off(tmp_path):
+    outbox = FileOutbox(tmp_path)
+    first = outbox.enqueue(
+        "mqtt_event",
+        {"event": "stage"},
+        workflow_id="correlation-1",
+        now=100.0,
+    )
+    outbox.enqueue(
+        "mqtt_event",
+        {"event": "result"},
+        workflow_id="correlation-1",
+        now=100.0,
+    )
+    outbox.mark_failed(first, "network", now=100.0)
+
+    assert outbox.due_records(now=100.5) == []
+    assert [record.payload["event"] for record in outbox.due_records(now=101.0)] == [
+        "stage",
+        "result",
+    ]
+
+
 class FakePahoClient:
     def __init__(self, *, publish_rc=0):
         self.published = []
@@ -178,6 +212,26 @@ def test_mqtt_dispatches_valid_commands_and_publishes_error_for_duplicate():
     payload = json.loads(mqtt._client.published[0]["payload"])
     assert payload["event_name"] == "device.error"
     assert payload["payload"]["error_type"] == "invalid_command"
+
+
+def test_mqtt_dispatches_firmware_update_command_from_nested_topic():
+    config = AgentConfig.from_mapping({"device": {"id": "jetson-01"}})
+    handled = []
+    mqtt = EdgeMqttClient(config=config, on_command=handled.append)
+    envelope = new_envelope(
+        device_id="jetson-01",
+        event_name="firmware.update_requested",
+        payload={"target": "specific", "version": "v1.8.0"},
+        correlation_id="correlation-1",
+        request_id="request-1",
+    )
+
+    mqtt.handle_message(
+        "drovenai/devices/jetson-01/commands/firmware/update",
+        envelope.to_json(),
+    )
+
+    assert handled == [envelope]
 
 
 def test_mqtt_publish_preserves_dotted_backend_event_topic():

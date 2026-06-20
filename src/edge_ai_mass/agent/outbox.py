@@ -47,6 +47,7 @@ class FileOutbox:
         self.dead_dir = self.root / "dead"
         self.max_attempts = max_attempts
         self.retention_seconds = retention_seconds
+        self._sequence = 0
 
     def start(self) -> None:
         self.pending_dir.mkdir(parents=True, exist_ok=True)
@@ -71,7 +72,13 @@ class FileOutbox:
             next_attempt_at=created_at,
             workflow_id=workflow_id,
         )
-        path = self.pending_dir / f"{int(created_at * 1000)}-{record.id}.json"
+        self._sequence += 1
+        created_ns = (
+            int(now * 1_000_000_000)
+            if now is not None
+            else time.time_ns()
+        )
+        path = self.pending_dir / f"{created_ns}-{self._sequence:06d}-{record.id}.json"
         record.path = str(path)
         self._write_record(path, record)
         return record
@@ -80,8 +87,12 @@ class FileOutbox:
         self.start()
         current = now if now is not None else time.time()
         records: list[OutboxRecord] = []
+        blocked_ordering_keys: set[str] = set()
         for path in sorted(self.pending_dir.glob("*.json")):
             record = self._read_record(path)
+            ordering_key = _ordering_key(record)
+            if ordering_key and ordering_key in blocked_ordering_keys:
+                continue
             if record.dead_lettered:
                 continue
             if current - record.created_at > self.retention_seconds:
@@ -89,9 +100,27 @@ class FileOutbox:
                 continue
             if record.next_attempt_at <= current:
                 records.append(record)
+            elif ordering_key:
+                blocked_ordering_keys.add(ordering_key)
             if len(records) >= limit:
                 break
         return records
+
+    def has_pending(self, kind: str, *, workflow_id: str) -> bool:
+        """Return whether a durable record is already queued for this workflow lane."""
+
+        if not workflow_id:
+            return False
+        self.start()
+        for path in self.pending_dir.glob("*.json"):
+            record = self._read_record(path)
+            if (
+                not record.dead_lettered
+                and record.kind == kind
+                and record.workflow_id == workflow_id
+            ):
+                return True
+        return False
 
     def mark_sent(self, record: OutboxRecord) -> None:
         path = Path(record.path)
@@ -138,3 +167,9 @@ class FileOutbox:
         self._write_record(destination, record)
         if source.exists():
             source.unlink()
+
+
+def _ordering_key(record: OutboxRecord) -> str:
+    if record.kind == "mqtt_event" and record.workflow_id:
+        return f"{record.kind}:{record.workflow_id}"
+    return ""

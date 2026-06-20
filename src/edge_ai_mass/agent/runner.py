@@ -11,8 +11,9 @@ from typing import Any, Callable
 from edge_ai_mass.agent.camera import CaptureAdapter
 from edge_ai_mass.agent.config import AgentConfig
 from edge_ai_mass.agent.envelopes import Envelope, new_envelope
+from edge_ai_mass.agent.firmware import FirmwareUpdateError, FirmwareUpdateManager
 from edge_ai_mass.agent.http_client import EdgeHttpClient
-from edge_ai_mass.agent.inference import InferenceRunner
+from edge_ai_mass.agent.inference import InferenceRunner, InferenceStageReporter
 from edge_ai_mass.agent.media import MediaRenderer, MediaUploadJob
 from edge_ai_mass.agent.model_manager import ModelDeploymentError, ModelManager
 from edge_ai_mass.agent.mqtt_client import EdgeMqttClient
@@ -45,6 +46,7 @@ class EdgeDeviceAgent:
         preview_camera_available: Callable[[str], bool] | None = None,
         model_manager: ModelManager | None = None,
         media_renderer: MediaRenderer | None = None,
+        firmware_manager: FirmwareUpdateManager | None = None,
     ) -> None:
         self.config = config
         self.secret_store = secret_store or EnvironmentSecretStore()
@@ -65,6 +67,10 @@ class EdgeDeviceAgent:
             active_models=self.active_models,
         )
         self.media_renderer = media_renderer or MediaRenderer(config.runtime.media_dir)
+        self.firmware_manager = firmware_manager or FirmwareUpdateManager(
+            device_type=config.device.type,
+            current_version=config.device.firmware_version,
+        )
         self._inference_busy = False
         self._stop_requested = False
         self._inference_runner: InferenceRunner | None = None
@@ -229,6 +235,8 @@ class EdgeDeviceAgent:
         )
         if envelope.event_name == "inference.requested":
             self._handle_inference(envelope)
+        elif envelope.event_name == "firmware.update_requested":
+            self._handle_firmware_update(envelope)
         elif envelope.event_name == "preview.start_requested":
             self._handle_preview_start(envelope)
         elif envelope.event_name == "preview.webrtc_signal":
@@ -264,7 +272,18 @@ class EdgeDeviceAgent:
             correlation_id=correlation_id,
             request_id=request_id,
         )
-        if self.mqtt is not None and self.mqtt.is_connected:
+        workflow_id = correlation_id or request_id or ""
+        pending_predecessor = self.outbox.has_pending(
+            "mqtt_event",
+            workflow_id=workflow_id,
+        )
+        if pending_predecessor:
+            logger.info(
+                "MQTT event follows pending workflow event; queueing event=%s message_id=%s",
+                event_name,
+                envelope.message_id,
+            )
+        elif self.mqtt is not None and self.mqtt.is_connected:
             try:
                 self.mqtt.publish_envelope(envelope)
                 return envelope
@@ -286,7 +305,7 @@ class EdgeDeviceAgent:
         self.outbox.enqueue(
             "mqtt_event",
             {"envelope": envelope.to_dict()},
-            workflow_id=correlation_id or request_id or "",
+            workflow_id=workflow_id,
         )
         logger.info(
             "MQTT event persisted to outbox: event=%s message_id=%s",
@@ -296,7 +315,14 @@ class EdgeDeviceAgent:
         return envelope
 
     def flush_outbox(self) -> None:
+        blocked_workflows: set[str] = set()
         for record in self.outbox.due_records():
+            if (
+                record.kind == "mqtt_event"
+                and record.workflow_id
+                and record.workflow_id in blocked_workflows
+            ):
+                continue
             try:
                 if record.kind == "telemetry":
                     assert self.http is not None
@@ -341,6 +367,8 @@ class EdgeDeviceAgent:
                     exc,
                 )
                 self.outbox.mark_failed(record, str(exc))
+                if record.kind == "mqtt_event" and record.workflow_id:
+                    blocked_workflows.add(record.workflow_id)
             else:
                 self.outbox.mark_sent(record)
                 logger.info(
@@ -352,6 +380,16 @@ class EdgeDeviceAgent:
     def _handle_inference(self, envelope: Envelope) -> None:
         request_id = _request_id(envelope)
         correlation_id = envelope.correlation_id
+        stage_reporter = InferenceStageReporter(
+            request_id=request_id,
+            correlation_id=correlation_id,
+            publish=lambda payload: self.publish_event(
+                "inference.stage",
+                payload,
+                correlation_id=correlation_id,
+                request_id=request_id,
+            ),
+        )
         self._inference_busy = True
         self.send_telemetry(
             status="online",
@@ -364,16 +402,20 @@ class EdgeDeviceAgent:
                 envelope.payload,
                 request_id=request_id,
                 correlation_id=correlation_id,
+                stage_reporter=stage_reporter,
             )
+            stage_reporter.update("media-output", "running")
+            media_summary = self._upload_requested_media(envelope, result)
+            stage_reporter.update("media-output", "completed", media_summary)
             self.publish_event(
                 "inference.result",
                 result.payload,
                 correlation_id=correlation_id,
                 request_id=request_id,
             )
-            self._upload_requested_media(envelope, result)
         except Exception as exc:
             logger.exception("Inference command failed")
+            stage_reporter.fail_active(exc)
             self.publish_event(
                 "inference.failed",
                 _error_payload(
@@ -393,6 +435,60 @@ class EdgeDeviceAgent:
                 correlation_id=correlation_id,
                 request_id=request_id,
             )
+
+    def _handle_firmware_update(self, envelope: Envelope) -> None:
+        request_id = _request_id(envelope)
+        correlation_id = envelope.correlation_id
+
+        def publish_progress(payload: dict[str, Any]) -> None:
+            self.publish_event(
+                "firmware.update.progress",
+                payload,
+                correlation_id=correlation_id,
+                request_id=request_id,
+            )
+
+        try:
+            payload = self.firmware_manager.apply(
+                envelope.payload,
+                progress=publish_progress,
+            )
+        except FirmwareUpdateError as exc:
+            self.publish_event(
+                "firmware.update.failed",
+                _error_payload(
+                    exc.error_type,
+                    exc.summary,
+                    request_id=request_id,
+                    correlation_id=correlation_id,
+                    retryable=exc.retryable,
+                ),
+                correlation_id=correlation_id,
+                request_id=request_id,
+            )
+            return
+        except Exception as exc:
+            logger.exception("Firmware update command failed")
+            self.publish_event(
+                "firmware.update.failed",
+                _error_payload(
+                    "firmware_update_failed",
+                    str(exc),
+                    request_id=request_id,
+                    correlation_id=correlation_id,
+                    retryable=False,
+                ),
+                correlation_id=correlation_id,
+                request_id=request_id,
+            )
+            return
+
+        self.publish_event(
+            "firmware.update.succeeded",
+            payload,
+            correlation_id=correlation_id,
+            request_id=request_id,
+        )
 
     def _handle_preview_start(self, envelope: Envelope) -> None:
         request_id = _request_id(envelope)
@@ -561,7 +657,7 @@ class EdgeDeviceAgent:
             request_id=request_id,
         )
 
-    def _upload_requested_media(self, envelope: Envelope, result: Any) -> None:
+    def _upload_requested_media(self, envelope: Envelope, result: Any) -> dict[str, Any]:
         options = envelope.payload.get("options")
         options = options if isinstance(options, dict) else {}
         jobs = self.media_renderer.render_requested(
@@ -572,10 +668,20 @@ class EdgeDeviceAgent:
             return_annotated_image=bool(options.get("return_annotated_image")),
             return_depth_preview=bool(options.get("return_depth_preview")),
         )
+        uploaded = 0
+        queued = 0
         for job in jobs:
-            self._upload_media_job(job)
+            if self._upload_media_job(job) == "uploaded":
+                uploaded += 1
+            else:
+                queued += 1
+        return {
+            "requested_count": len(jobs),
+            "uploaded_count": uploaded,
+            "queued_count": queued,
+        }
 
-    def _upload_media_job(self, job: MediaUploadJob) -> None:
+    def _upload_media_job(self, job: MediaUploadJob) -> str:
         try:
             assert self.http is not None
             self.http.upload_media(
@@ -585,6 +691,7 @@ class EdgeDeviceAgent:
                 correlation_id=job.correlation_id,
                 metadata=job.metadata,
             )
+            return "uploaded"
         except Exception as exc:
             logger.warning("Media upload failed; queued locally: %s", exc)
             self.outbox.enqueue(
@@ -598,6 +705,7 @@ class EdgeDeviceAgent:
                 },
                 workflow_id=job.correlation_id or job.request_id or "",
             )
+            return "queued"
 
     def _get_inference_runner(self) -> InferenceRunner:
         if self._inference_runner is None:

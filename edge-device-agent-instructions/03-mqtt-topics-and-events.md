@@ -59,6 +59,7 @@ Implemented command topics:
 | Topic | `event_name` | Meaning |
 | --- | --- | --- |
 | `drovenai/devices/{device_id}/commands/inference` | `inference.requested` | Run one inference job |
+| `drovenai/devices/{device_id}/commands/firmware/update` | `firmware.update_requested` | Install the latest or a specific firmware version |
 | `drovenai/devices/{device_id}/commands/preview/start` | `preview.start_requested` | Start a preview session |
 | `drovenai/devices/{device_id}/commands/preview/signal` | `preview.webrtc_signal` | Deliver WebRTC offer, ICE candidate, close, or renegotiation data |
 | `drovenai/devices/{device_id}/commands/preview/stop` | `preview.stop_requested` | Stop a preview session |
@@ -91,6 +92,23 @@ Edge behavior:
 4. Publish an `inference.result` event.
 5. Upload requested media with the same `request_id` and `correlation_id`.
 6. Send telemetry with `inference_busy=false`.
+
+### `firmware.update_requested`
+
+Payload:
+
+```json
+{
+  "request_id": "uuid",
+  "correlation_id": "uuid",
+  "target": "latest",
+  "version": null,
+  "current_version": "1.7.0",
+  "requested_at": "2026-06-20T08:30:00Z"
+}
+```
+
+When `target=specific`, `version` contains the exact requested version. The edge MUST validate package signatures and compatibility before installation, publish progress or failure events using the same correlation identifiers, and MUST NOT interpret the version as a shell command or package URL.
 
 ### `preview.start_requested`
 
@@ -248,6 +266,7 @@ Recommended edge event names:
 
 | Topic suffix | `event_name` | Purpose | Backend target |
 | --- | --- | --- | --- |
+| `events/inference.stage` | `inference.stage` | Create or update one live execution stage | `ApplyInferenceStageAction` |
 | `events/inference.result` | `inference.result` | Inference completed successfully | `StoreInferenceResultAction` |
 | `events/inference.failed` | `inference.failed` | Inference failed | `FailInferenceJobAction` |
 | `events/preview.ready` | `preview.ready` | Edge reserved camera and can accept WebRTC signaling | `ApplyPreviewEventAction` |
@@ -262,6 +281,40 @@ Recommended edge event names:
 | `events/device.error` | `device.error` | Device-level error | Future error/audit handler |
 
 Preview signaling events are detailed in `07-webrtc-preview-signaling.md`.
+
+### `inference.stage`
+
+Publish this event whenever the visible execution stage starts, advances, completes, or fails. Reuse the same `stage_key` to update an existing stage instead of creating duplicates.
+
+Envelope payload:
+
+```json
+{
+  "request_id": "uuid-from-inference-request",
+  "correlation_id": "uuid-from-inference-request",
+  "stage_key": "object-detection",
+  "sequence": 2,
+  "status": "running",
+  "title": "Detecting objects",
+  "description": "YOLO is detecting waste objects in the captured frame.",
+  "progress_percent": 45,
+  "started_at": "2026-06-20T10:30:12Z",
+  "completed_at": null,
+  "metadata": {
+    "model": "yolo-waste-v1"
+  }
+}
+```
+
+Requirements:
+
+- `request_id` or `correlation_id` MUST identify the matching inference request.
+- `stage_key` SHOULD be stable for updates to the same stage.
+- `sequence` controls display order and SHOULD start at `1`.
+- `status` MUST be `pending`, `running`, `completed`, or `failed`.
+- `title` is required and `description` SHOULD explain the current Jetson operation in operator-friendly language.
+- `progress_percent`, when present, MUST be an integer from `0` through `100`.
+- The edge SHOULD publish the final `inference.result` or `inference.failed` only after its last stage update.
 
 ### `inference.result`
 

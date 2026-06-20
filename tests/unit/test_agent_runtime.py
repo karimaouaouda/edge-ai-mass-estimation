@@ -7,13 +7,23 @@ import hashlib
 import numpy as np
 import pytest
 
-from edge_ai_mass.agent.inference import normalize_pipeline_result
+from edge_ai_mass.agent.camera import CapturedFrame
+from edge_ai_mass.agent.inference import (
+    InferenceCommandResult,
+    InferenceStageReporter,
+    normalize_pipeline_result,
+)
 from edge_ai_mass.agent.model_manager import ModelDeploymentError, ModelManager
 from edge_ai_mass.agent.outbox import FileOutbox
 from edge_ai_mass.agent.preview import PreviewError, PreviewManager
 from edge_ai_mass.agent.runner import EdgeDeviceAgent
 from edge_ai_mass.agent.config import AgentConfig
 from edge_ai_mass.agent.envelopes import new_envelope
+from edge_ai_mass.agent.firmware import (
+    FirmwareUpdateError,
+    FirmwareUpdateManager,
+    PreparedFirmwareUpdate,
+)
 from edge_ai_mass.pipeline.pipeline import Detection, ObjectEstimate, PipelineResult
 
 
@@ -50,6 +60,95 @@ def test_normalize_pipeline_result_matches_backend_inference_payload():
     assert payload["objects"][0]["class_label"] == "plastic_bottle"
     assert payload["objects"][0]["bbox"] == {"x": 10.0, "y": 20.0, "w": 100.0, "h": 140.0}
     assert payload["objects"][0]["estimated_mass_grams"] == pytest.approx(120.5)
+
+
+def test_inference_stage_reporter_reuses_stage_identity_and_timestamps():
+    updates = []
+    reporter = InferenceStageReporter(
+        request_id="request-1",
+        correlation_id="correlation-1",
+        publish=updates.append,
+    )
+
+    reporter.update("object-detection", "running", {"model": "yolo-waste-v1"})
+    reporter.update("object-detection", "completed", {"object_count": 2})
+
+    assert [item["status"] for item in updates] == ["running", "completed"]
+    assert updates[0]["stage_key"] == updates[1]["stage_key"] == "object-detection"
+    assert updates[0]["sequence"] == updates[1]["sequence"] == 2
+    assert updates[0]["started_at"] == updates[1]["started_at"]
+    assert updates[0]["completed_at"] is None
+    assert updates[1]["completed_at"] is not None
+    assert updates[1]["progress_percent"] == 45
+    assert updates[1]["request_id"] == "request-1"
+    assert updates[1]["correlation_id"] == "correlation-1"
+
+
+def test_firmware_manager_verifies_signature_and_compatibility_before_install():
+    class RecordingExecutor:
+        def __init__(self):
+            self.installed = []
+
+        def prepare(self, *, version, device_type, current_version):
+            assert version == "v1.8.0"
+            assert device_type == "jetson_nano"
+            assert current_version == "1.7.0"
+            return PreparedFirmwareUpdate(
+                version="v1.8.0",
+                signature_verified=True,
+                compatible=True,
+                metadata={"key_id": "release-key-1"},
+            )
+
+        def install(self, prepared):
+            self.installed.append(prepared)
+            return {"restart_required": True}
+
+    executor = RecordingExecutor()
+    manager = FirmwareUpdateManager(
+        device_type="jetson_nano",
+        current_version="1.7.0",
+        executor=executor,
+    )
+    progress = []
+
+    result = manager.apply(
+        {"target": "specific", "version": "v1.8.0"},
+        progress=progress.append,
+    )
+
+    assert [item["status"] for item in progress] == [
+        "validating",
+        "preparing",
+        "verified",
+        "installing",
+        "completed",
+    ]
+    assert len(executor.installed) == 1
+    assert result["version"] == "v1.8.0"
+
+
+def test_firmware_manager_rejects_command_like_version_without_calling_executor():
+    class UnexpectedExecutor:
+        def prepare(self, **_kwargs):
+            raise AssertionError("Unsafe version reached firmware executor")
+
+        def install(self, _prepared):
+            raise AssertionError("Unsafe package reached installation")
+
+    manager = FirmwareUpdateManager(
+        device_type="jetson_nano",
+        current_version="1.7.0",
+        executor=UnexpectedExecutor(),
+    )
+
+    with pytest.raises(FirmwareUpdateError) as exc_info:
+        manager.apply(
+            {"target": "specific", "version": "v1.8.0; reboot"},
+            progress=lambda _payload: None,
+        )
+
+    assert exc_info.value.error_type == "invalid_firmware_version"
 
 
 def test_model_manager_activates_local_component_and_updates_versions(tmp_path):
@@ -242,8 +341,13 @@ class RecordingMqtt:
         )
 
 
-def test_agent_preview_command_flow_publishes_ready_then_signaling_events():
-    config = AgentConfig.from_mapping({"device": {"id": "jetson-01"}})
+def test_agent_preview_command_flow_publishes_ready_then_signaling_events(tmp_path):
+    config = AgentConfig.from_mapping(
+        {
+            "device": {"id": "jetson-01"},
+            "runtime": {"outbox_path": str(tmp_path)},
+        }
+    )
     mqtt = RecordingMqtt()
     agent = EdgeDeviceAgent(
         config,
@@ -299,6 +403,159 @@ class FixedTelemetry:
         }
 
 
+class SuccessfulInferenceRunner:
+    def run_command(
+        self,
+        _payload,
+        *,
+        request_id,
+        correlation_id,
+        stage_reporter,
+    ):
+        for stage_key in (
+            "source-acquisition",
+            "object-detection",
+            "depth-estimation",
+            "mass-estimation",
+            "result-normalization",
+        ):
+            stage_reporter.update(stage_key, "running")
+            stage_reporter.update(stage_key, "completed")
+        pipeline_result = PipelineResult(frame_time_ms=10.0)
+        return InferenceCommandResult(
+            payload={
+                "request_id": request_id,
+                "correlation_id": correlation_id,
+                "object_count": 0,
+            },
+            captured=CapturedFrame(
+                image=np.zeros((8, 8, 3), dtype=np.uint8),
+                source_type="camera",
+                source_reference="camera:0",
+                metadata={},
+            ),
+            pipeline_result=pipeline_result,
+        )
+
+
+class EmptyMediaRenderer:
+    def render_requested(self, **_kwargs):
+        return []
+
+
+def test_agent_publishes_last_stage_before_final_inference_result(tmp_path):
+    config = AgentConfig.from_mapping(
+        {
+            "device": {"id": "jetson-01"},
+            "runtime": {
+                "telemetry_transport": "mqtt",
+                "outbox_path": str(tmp_path),
+            },
+        }
+    )
+    mqtt = RecordingMqtt()
+    agent = EdgeDeviceAgent(
+        config,
+        mqtt_client=mqtt,
+        telemetry=FixedTelemetry(),
+        inference_runner_factory=SuccessfulInferenceRunner,
+        media_renderer=EmptyMediaRenderer(),
+    )
+    command = new_envelope(
+        device_id="jetson-01",
+        event_name="inference.requested",
+        payload={"source_type": "camera", "source_reference": "camera:0"},
+        correlation_id="correlation-1",
+        request_id="request-1",
+    )
+
+    agent.handle_command(command)
+
+    assert mqtt.events[-1]["event_name"] == "inference.result"
+    stage_events = [event for event in mqtt.events if event["event_name"] == "inference.stage"]
+    assert stage_events[-1]["payload"]["stage_key"] == "media-output"
+    assert stage_events[-1]["payload"]["status"] == "completed"
+    assert stage_events[-1]["payload"]["progress_percent"] == 100
+    assert stage_events[-1]["payload"]["metadata"] == {
+        "requested_count": 0,
+        "uploaded_count": 0,
+        "queued_count": 0,
+    }
+
+
+def test_agent_publishes_failed_stage_before_inference_failure(tmp_path):
+    class FailingInferenceRunner:
+        def run_command(self, _payload, *, stage_reporter, **_kwargs):
+            stage_reporter.update("object-detection", "running")
+            raise RuntimeError("detector unavailable")
+
+    config = AgentConfig.from_mapping(
+        {
+            "device": {"id": "jetson-01"},
+            "runtime": {
+                "telemetry_transport": "mqtt",
+                "outbox_path": str(tmp_path),
+            },
+        }
+    )
+    mqtt = RecordingMqtt()
+    agent = EdgeDeviceAgent(
+        config,
+        mqtt_client=mqtt,
+        telemetry=FixedTelemetry(),
+        inference_runner_factory=FailingInferenceRunner,
+    )
+    command = new_envelope(
+        device_id="jetson-01",
+        event_name="inference.requested",
+        payload={"source_type": "camera", "source_reference": "camera:0"},
+        correlation_id="correlation-1",
+        request_id="request-1",
+    )
+
+    agent.handle_command(command)
+
+    assert [event["event_name"] for event in mqtt.events] == [
+        "inference.stage",
+        "inference.stage",
+        "inference.failed",
+    ]
+    assert mqtt.events[-2]["payload"]["status"] == "failed"
+    assert mqtt.events[-2]["payload"]["metadata"]["error"] == "detector unavailable"
+
+
+def test_agent_firmware_command_fails_closed_when_secure_executor_is_unavailable(tmp_path):
+    config = AgentConfig.from_mapping(
+        {
+            "device": {
+                "id": "jetson-01",
+                "type": "jetson_nano",
+                "firmware_version": "1.7.0",
+            },
+            "runtime": {"outbox_path": str(tmp_path)},
+        }
+    )
+    mqtt = RecordingMqtt()
+    agent = EdgeDeviceAgent(config, mqtt_client=mqtt)
+    command = new_envelope(
+        device_id="jetson-01",
+        event_name="firmware.update_requested",
+        payload={"target": "latest", "version": None},
+        correlation_id="correlation-1",
+        request_id="request-1",
+    )
+
+    agent.handle_command(command)
+
+    assert [event["event_name"] for event in mqtt.events] == [
+        "firmware.update.progress",
+        "firmware.update.failed",
+    ]
+    assert mqtt.events[-1]["payload"]["error_type"] == "firmware_updater_unavailable"
+    assert mqtt.events[-1]["correlation_id"] == "correlation-1"
+    assert mqtt.events[-1]["request_id"] == "request-1"
+
+
 def test_agent_can_send_telemetry_through_mqtt():
     config = AgentConfig.from_mapping(
         {
@@ -326,6 +583,47 @@ def test_agent_can_send_telemetry_through_mqtt():
 
 class DisconnectedMqtt(RecordingMqtt):
     is_connected = False
+
+
+def test_agent_queues_later_workflow_events_after_transient_publish_failure(tmp_path):
+    class FailsFirstPublishMqtt(RecordingMqtt):
+        def __init__(self):
+            super().__init__()
+            self.publish_attempts = 0
+
+        def publish_envelope(self, envelope):
+            self.publish_attempts += 1
+            if self.publish_attempts == 1:
+                raise RuntimeError("broker write failed")
+            super().publish_envelope(envelope)
+
+    config = AgentConfig.from_mapping(
+        {
+            "device": {"id": "jetson-01"},
+            "runtime": {"outbox_path": str(tmp_path)},
+        }
+    )
+    mqtt = FailsFirstPublishMqtt()
+    outbox = FileOutbox(tmp_path)
+    agent = EdgeDeviceAgent(config, mqtt_client=mqtt, outbox=outbox)
+
+    agent.publish_event(
+        "inference.stage",
+        {"stage_key": "media-output", "status": "completed"},
+        correlation_id="correlation-1",
+        request_id="request-1",
+    )
+    agent.publish_event(
+        "inference.result",
+        {"object_count": 0},
+        correlation_id="correlation-1",
+        request_id="request-1",
+    )
+
+    assert mqtt.publish_attempts == 1
+    assert [
+        record.payload["envelope"]["event_name"] for record in outbox.due_records()
+    ] == ["inference.stage", "inference.result"]
 
 
 def test_disconnected_mqtt_telemetry_is_persisted_to_outbox(tmp_path):

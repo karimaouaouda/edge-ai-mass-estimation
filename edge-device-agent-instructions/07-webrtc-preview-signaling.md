@@ -101,7 +101,7 @@ Payload:
 }
 ```
 
-The Laravel preview start action sends `request_id`, `correlation_id`, `mode`, `camera_source`, `ttl_seconds`, and the `webrtc` negotiation preferences. `PublishPreviewSignalAction` publishes offers and Laravel's MQTT consumer applies edge answers, ICE candidates, and lifecycle events to the preview session.
+The Laravel preview start action sends `request_id`, `correlation_id`, `mode`, `camera_source`, `ttl_seconds`, and the `webrtc` negotiation preferences. After `preview.ready`, the device detail page creates a browser `RTCPeerConnection` and calls `PublishPreviewSignalAction` with its SDP offer. Laravel's MQTT consumer applies edge answers, ICE candidates, and lifecycle events to the preview session, while the browser controller applies them to the peer connection.
 
 Edge behavior:
 
@@ -358,9 +358,16 @@ Payload:
   "error_type": "camera_unavailable",
   "summary": "Camera source camera:0 could not be opened",
   "retryable": true,
+  "details": {
+    "code": "v4l2_open_failed",
+    "device_path": "/dev/video0",
+    "stderr": "Device or resource busy"
+  },
   "failed_at": "2026-06-18T12:00:03Z"
 }
 ```
+
+The edge MAY add structured diagnostic fields such as `details`, `component`, or `stack_trace`. Laravel preserves the complete payload and exposes it to operators from the failed preview session; never include credentials, tokens, or private keys.
 
 Recommended `error_type` values:
 

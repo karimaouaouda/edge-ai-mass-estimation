@@ -100,6 +100,7 @@ Laravel publishes command envelopes to these topics:
 | Topic | Envelope `event_name` | Publisher |
 | --- | --- | --- |
 | `{prefix}/devices/{device_id}/commands/inference` | `inference.requested` | `PublishInferenceCommandAction` |
+| `{prefix}/devices/{device_id}/commands/firmware/update` | `firmware.update_requested` | `PublishFirmwareUpdateAction` |
 | `{prefix}/devices/{device_id}/commands/preview/start` | `preview.start_requested` | `StartPreviewSessionAction` |
 | `{prefix}/devices/{device_id}/commands/preview/signal` | `preview.webrtc_signal` | `PublishPreviewSignalAction` |
 | `{prefix}/devices/{device_id}/commands/preview/stop` | `preview.stop_requested` | `StopPreviewSessionAction` |
@@ -107,7 +108,9 @@ Laravel publishes command envelopes to these topics:
 
 The domain action passes only the application payload to `MqttPublisher`. `MessageEnvelopeBuilder` adds message identity, device identity, correlation, and timestamp exactly once.
 
-When using the Mosquitto transport, the backend publishes at QoS 0 and then records the outgoing command in `mqtt_messages`. A transport error records a failed trace and rethrows the error to the caller.
+For preview, `preview.ready` is the trigger for the browser on the device detail page to create a receive-only WebRTC offer. The browser sends that offer and its trickle ICE candidates through the Livewire `publishPreviewSignal` method, which publishes them on `commands/preview/signal`.
+
+When using the Mosquitto transport, the backend first records a `pending` outgoing trace, publishes at QoS 0, and then marks that trace `published`. A transport error marks the same trace `failed` and rethrows the error to the caller.
 
 ## Edge to Laravel topics
 
@@ -123,6 +126,7 @@ Supported events are dispatched as follows:
 | Topic/event | Backend behavior |
 | --- | --- |
 | `telemetry` / `telemetry.reported` | Creates telemetry, updates the status snapshot, and updates device health/last seen |
+| `events/inference.stage` | Upserts an ordered live stage and marks the matching inference job running |
 | `events/inference.result` | Stores the result and detected objects, completes the matching inference job |
 | `events/inference.failed` | Marks the matching inference job failed |
 | `events/preview.ready` | Marks the session ready for a browser offer |
@@ -141,7 +145,7 @@ Invalid JSON, unsupported topic shapes, identity mismatches, and envelope mismat
 
 ## Start the inbound consumer
 
-The consumer is a long-running process and must run alongside the web server and queue worker.
+The consumer is a long-running process and must run alongside the web server and queue worker. Docker Compose starts it as the dedicated `mqtt.consumer` service with a client ID separate from the web publisher.
 
 Inside Sail:
 
@@ -174,7 +178,7 @@ php artisan mqtt:consume \
   --tls
 ```
 
-Run this command under Supervisor, systemd, Kubernetes, or another process manager in production. The current Compose file provides Mosquitto but does not automatically start a separate consumer process.
+Run this command under Supervisor, systemd, Kubernetes, or another process manager in production. For local development, `docker compose up -d` starts the dedicated consumer automatically; use the manual commands above only for debugging or when running outside Compose.
 
 ## Send and exchange diagnostics
 
@@ -267,4 +271,3 @@ The trace stores topic, direction, message type, QoS, envelope, application payl
 - `Modules/Mqtt/app/Actions/ProcessInboundMqttMessageAction.php`
 - `app/Console/Commands/MqttConsume.php`
 - `tests/Feature/MqttInboundProcessingTest.php`
-

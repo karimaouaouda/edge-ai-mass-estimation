@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 COMMAND_EVENT_BY_SUFFIX = {
     "inference": "inference.requested",
+    "firmware/update": "firmware.update_requested",
     "preview/start": "preview.start_requested",
     "preview/signal": "preview.webrtc_signal",
     "preview/stop": "preview.stop_requested",
@@ -236,6 +237,8 @@ def required_payload_fields(event_name: str) -> tuple[str, ...]:
 
     if event_name == "inference.requested":
         return ("source_type", "source_reference")
+    if event_name == "firmware.update_requested":
+        return ("target",)
     if event_name == "preview.start_requested":
         return ("camera_source",)
     if event_name == "preview.webrtc_signal":

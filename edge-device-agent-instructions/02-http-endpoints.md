@@ -23,7 +23,7 @@ All endpoints require `X-Device-Token`.
 
 There is no current edge self-registration endpoint. Device records and tokens are created by an authenticated operator in the Laravel dashboard.
 
-There is no current HTTP endpoint for inference results. The backend has `StoreInferenceResultAction`; the intended production path is an inbound MQTT event consumer. Until that consumer exists, backend tests and local simulation can call actions or CLI tooling.
+There is no HTTP endpoint for inference results. Devices publish results over MQTT, and the backend's long-running consumer validates the envelope, stores the trace, and dispatches it to `StoreInferenceResultAction`.
 
 ## POST telemetry
 
