@@ -98,4 +98,9 @@ class MiDaSDepthModule(BaseModule):
             mode="bilinear",
             align_corners=False,
         ).squeeze()
+
+        #save as depth image with model name and timestamp
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        debug_path = f"debug_depth_{self.model_type.replace('/', '_')}_{timestamp}.png"
+        cv2.imwrite(debug_path, (prediction.cpu().numpy() / np.max(prediction.cpu().numpy()) * 255).astype(np.uint8))
         return prediction.cpu().numpy()
