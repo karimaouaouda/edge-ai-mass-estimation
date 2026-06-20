@@ -75,3 +75,6 @@ artifacts
 release
 .edge_ai_mass/*
 builds/wheels/*
+
+testsdd.zip
+testsdd/

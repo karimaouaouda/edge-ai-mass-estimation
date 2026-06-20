@@ -396,6 +396,8 @@ class EdgeDeviceAgent:
             correlation_id=correlation_id,
             request_id=request_id,
         )
+
+        print(f"Received inference request: correlation_id={correlation_id} request_id={request_id}")
         try:
             runner = self._get_inference_runner()
             result = runner.run_command(
@@ -415,6 +417,7 @@ class EdgeDeviceAgent:
             )
         except Exception as exc:
             logger.exception("Inference command failed")
+            print(f"Inference command failed: {exc}")
             stage_reporter.fail_active(exc)
             self.publish_event(
                 "inference.failed",
@@ -720,6 +723,8 @@ class EdgeDeviceAgent:
                     pipeline=pipeline,
                     active_models=self.active_models,
                 )
+
+        print("Inference runner initialized")
         return self._inference_runner
 
     def _install_signal_handlers(self) -> None:

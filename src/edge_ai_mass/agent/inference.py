@@ -186,11 +186,13 @@ class InferenceRunner:
                 {"source_type": source_type, "source_reference": source_reference},
             )
         try:
+            print(f"Capturing source for inference: type={source_type} reference={source_reference}")
             captured = self.capture_adapter.capture(
                 source_type=source_type,
                 source_reference=source_reference,
             )
         except Exception as exc:
+            print(f"Failed to capture source for inference: {exc}")
             if stage_reporter is not None:
                 stage_reporter.fail_active(exc)
             raise
@@ -222,6 +224,7 @@ class InferenceRunner:
                 "running",
                 {"object_count": len(result.objects)},
             )
+        print(f"Normalizing pipeline result: {len(result.objects)} objects")
         try:
             normalized = normalize_pipeline_result(
                 result,
