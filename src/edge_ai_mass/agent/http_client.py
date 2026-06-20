@@ -106,9 +106,10 @@ class EdgeHttpClient:
         """Submit heartbeat/resource state to Laravel."""
 
         body = json.dumps(payload).encode("utf-8")
+        print(f"Submitting telemetry to {self._url('telemetry')} with payload: {payload}")
         request = HttpRequest(
             method="POST",
-            url=self._url("telemetry"),
+            url=self._url('telemetry'),
             headers={
                 "Accept": "application/json",
                 "Content-Type": "application/json",
