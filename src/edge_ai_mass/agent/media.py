@@ -76,10 +76,45 @@ class MediaRenderer:
             raise RuntimeError("OpenCV is required to render annotated images") from exc
 
         output = image.copy()
-        for obj in result.objects:
+        palette = (
+            (0, 255, 0),
+            (255, 191, 0),
+            (255, 0, 255),
+            (0, 165, 255),
+            (255, 255, 0),
+        )
+        mask_alpha = 0.35
+        for index, obj in enumerate(result.objects):
             detection = obj.detection
+            color = palette[index % len(palette)]
+
+            if detection.mask is not None:
+                mask = np.asarray(detection.mask)
+                mask = np.squeeze(mask)
+                if mask.ndim == 2:
+                    if mask.shape != output.shape[:2]:
+                        mask = cv2.resize(
+                            mask.astype(np.uint8),
+                            (output.shape[1], output.shape[0]),
+                            interpolation=cv2.INTER_NEAREST,
+                        )
+                    mask_pixels = mask > 0
+                    if np.any(mask_pixels):
+                        color_array = np.asarray(color, dtype=np.float32)
+                        blended = (
+                            output[mask_pixels].astype(np.float32) * (1.0 - mask_alpha)
+                            + color_array * mask_alpha
+                        )
+                        output[mask_pixels] = np.clip(blended, 0, 255).astype(output.dtype)
+                        contours, _ = cv2.findContours(
+                            mask_pixels.astype(np.uint8),
+                            cv2.RETR_EXTERNAL,
+                            cv2.CHAIN_APPROX_SIMPLE,
+                        )
+                        cv2.drawContours(output, contours, -1, color, 2)
+
             x1, y1, x2, y2 = detection.bbox.astype(int)
-            cv2.rectangle(output, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.rectangle(output, (x1, y1), (x2, y2), color, 2)
             grams = (obj.mass_kg or 0.0) * 1000.0
             label = f"{detection.class_name} {grams:.0f}g"
             cv2.putText(
@@ -88,7 +123,7 @@ class MediaRenderer:
                 (x1, max(y1 - 8, 12)),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
-                (0, 255, 0),
+                color,
                 1,
             )
         Path(path).parent.mkdir(parents=True, exist_ok=True)
