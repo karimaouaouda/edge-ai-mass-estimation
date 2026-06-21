@@ -1,0 +1,267 @@
+# Governed YOLO segmentation pipeline for the detection stage.
+# Every path can be overridden by environment variables on Kaggle/CI or by
+# repeating: edge-ai-mass train ... --set dotted.path=value
+
+project:
+  name: edge-ai-mass-estimation
+  root: .
+  pipeline: yolo
+  model_stage: detection
+
+data:
+  output_dir: ${YOLO_DATASET_OUTPUT:data/processed/waste_seg_yolo}
+  classes:
+    - organic_waste
+    - plastic_bottle
+    - plastic_bag
+    - rigid_plastic
+    - metal_can
+    - glass
+    - paper_cardboard
+    - mixed_waste
+
+  # Hard links avoid another multi-GB local copy. They transparently fall back
+  # to copies across filesystems. Use "copy" in a Kaggle working directory.
+  materialize: hardlink
+  keep_empty_images: true
+  multipart_policy: largest
+  split:
+    train: 0.70
+    val: 0.15
+    test: 0.15
+    seed: 42
+  quality:
+    min_images: 100
+    min_instances: 100
+    require_all_classes: true
+    max_missing_image_fraction: 0.01
+  visualization:
+    enabled: true
+    splits: [train, val, test]
+    samples_per_split: 12
+    columns: 3
+    cell_width: 480
+    cell_height: 360
+    sample_max_side: 1280
+    seed: 42
+
+  sources:
+    - name: taco
+      required: true
+      annotations: ${TACO_ANNOTATIONS:data/raw/taco/annotations.json}
+      images: ${TACO_IMAGES:data/raw/taco}
+      resolver: taco
+      unknown_category: error
+      allow_bbox_fallback: false
+
+    - name: aquatrash
+      required: true
+      annotations: ${AQUATRASH_ANNOTATIONS:data/raw/aquatrash/annotations.json}
+      images: ${AQUATRASH_IMAGES:data/raw/aquatrash/Images}
+      resolver: direct
+      unknown_category: error
+      allow_bbox_fallback: false
+
+    - name: realwaste
+      required: true
+      # Produced by notebooks/prepare_realwaste_sam_kaggle.ipynb. Its COCO
+      # images retain source_class_name, which restores the material label.
+      annotations: ${REALWASTE_ANNOTATIONS:data/normalized/realwaste/annotations.json}
+      images: ${REALWASTE_IMAGES:data/raw/RealWaste}
+      file_name_fields: [source_file_name, file_name]
+      category_from_image_field: source_class_name
+      resolver: direct
+      category_mapping:
+        Cardboard: paper_cardboard
+        Food Organics: organic_waste
+        Glass: glass
+        Metal: metal_can
+        Miscellaneous Trash: mixed_waste
+        Paper: paper_cardboard
+        Plastic: rigid_plastic
+        Textile Trash: mixed_waste
+        Vegetation: organic_waste
+      unknown_category: error
+      allow_bbox_fallback: false
+
+model:
+  task: segment
+  # Any Ultralytics model name or local .pt checkpoint is accepted.
+  checkpoint: ${YOLO_CHECKPOINT:yolo26n-seg.pt}
+
+training:
+  run_name: waste-seg-yolo
+  artifacts_dir: ${TRAINING_ARTIFACTS:artifacts/training/yolo}
+  epochs: 100
+  batch: 16
+  imgsz: 640
+  patience: 20
+  device: 0
+  workers: 8
+  cache: false
+  amp: true
+  seed: 42
+  deterministic: true
+  optimizer: AdamW
+  verbose: true
+  hyperparameters:
+    lr0: 0.001
+    lrf: 0.01
+    momentum: 0.937
+    weight_decay: 0.0005
+    warmup_epochs: 3.0
+    warmup_momentum: 0.80
+    warmup_bias_lr: 0.10
+    box: 7.5
+    cls: 0.5
+    dfl: 1.5
+    nbs: 64
+    cos_lr: false
+    close_mosaic: 10
+    overlap_mask: true
+    mask_ratio: 4
+    multi_scale: 0.0
+    rect: false
+    freeze: null
+  augmentation:
+    augment: true
+    hsv_h: 0.015
+    hsv_s: 0.70
+    hsv_v: 0.40
+    degrees: 5.0
+    translate: 0.10
+    scale: 0.50
+    shear: 0.0
+    perspective: 0.0
+    flipud: 0.0
+    fliplr: 0.50
+    bgr: 0.0
+    mosaic: 1.0
+    mixup: 0.10
+    cutmix: 0.0
+    copy_paste: 0.30
+    copy_paste_mode: flip
+  extra_args: {}
+
+tuning:
+  enabled: true
+  # Guardrail: every configured model-quality hyperparameter/augmentation must
+  # also have an Optuna distribution below.
+  enforce_complete_space: true
+  study_name: waste-seg-yolo-optuna
+  version_by_config: true
+  storage: ${OPTUNA_STORAGE:artifacts/optuna/yolo.db}
+  # This is a high-dimensional space; 50 is a practical minimum. Use 100+
+  # trials for serious model selection or distributed workers with PostgreSQL.
+  trials: 50
+  epochs_per_trial: 15
+  timeout_seconds: null
+  direction: maximize
+  metric: mask_map50_95
+  split: val
+  seed: 42
+  multivariate: true
+  pruner_startup_trials: 3
+  pruner_warmup_epochs: 3
+  show_progress_bar: true
+  search_space:
+    # Capacity and training dynamics
+    batch: {type: categorical, choices: [8, 16, 24]}
+    imgsz: {type: categorical, choices: [512, 640, 768]}
+    optimizer: {type: categorical, choices: [SGD, AdamW, NAdam, RAdam, RMSProp]}
+    patience: {type: int, low: 5, high: 20, step: 5}
+    cos_lr: {type: categorical, choices: [false, true]}
+    nbs: {type: categorical, choices: [32, 64, 128]}
+    close_mosaic: {type: int, low: 0, high: 15, step: 5}
+    freeze: {type: categorical, choices: [null, 5, 10]}
+
+    # Optimizer, schedule, and loss gains
+    lr0: {type: float, low: 0.0001, high: 0.02, log: true}
+    lrf: {type: float, low: 0.01, high: 0.50, log: true}
+    momentum: {type: float, low: 0.80, high: 0.98}
+    weight_decay: {type: float, low: 0.00001, high: 0.01, log: true}
+    warmup_epochs: {type: float, low: 0.0, high: 5.0}
+    warmup_momentum: {type: float, low: 0.50, high: 0.95}
+    warmup_bias_lr: {type: float, low: 0.0, high: 0.20}
+    box: {type: float, low: 3.0, high: 12.0}
+    cls: {type: float, low: 0.20, high: 2.0, log: true}
+    dfl: {type: float, low: 0.50, high: 3.0}
+
+    # Segmentation behavior
+    overlap_mask: {type: categorical, choices: [false, true]}
+    mask_ratio: {type: categorical, choices: [2, 4, 8]}
+
+    # Color, geometric, and composition augmentation
+    augment: {type: categorical, choices: [false, true]}
+    hsv_h: {type: float, low: 0.0, high: 0.05}
+    hsv_s: {type: float, low: 0.20, high: 0.90}
+    hsv_v: {type: float, low: 0.20, high: 0.70}
+    degrees: {type: float, low: 0.0, high: 15.0}
+    translate: {type: float, low: 0.0, high: 0.25}
+    mosaic: {type: float, low: 0.0, high: 1.0}
+    mixup: {type: float, low: 0.0, high: 0.30}
+    cutmix: {type: float, low: 0.0, high: 0.30}
+    copy_paste: {type: float, low: 0.0, high: 0.50}
+    copy_paste_mode: {type: categorical, choices: [flip, mixup]}
+    scale: {type: float, low: 0.20, high: 0.80}
+    shear: {type: float, low: 0.0, high: 10.0}
+    perspective: {type: float, low: 0.0, high: 0.001}
+    flipud: {type: float, low: 0.0, high: 0.50}
+    fliplr: {type: float, low: 0.25, high: 0.75}
+    bgr: {type: float, low: 0.0, high: 0.30}
+    multi_scale: {type: float, low: 0.0, high: 0.50}
+    rect: {type: categorical, choices: [false, true]}
+
+evaluation:
+  splits: [val, test]
+  imgsz: 640
+  batch: 16
+  device: 0
+  conf: 0.001
+  iou: 0.70
+  plots: true
+  save_json: true
+  annotated_samples: 12
+  sample_seed: 42
+  prediction_conf: 0.25
+  # Example release gate: {test.mask_map50_95: 0.35}
+  quality_gates: {}
+
+export:
+  # The export stage always reads artifacts/.../models/best.pt, never last.pt.
+  enabled: false
+  # Select one or many: [onnx], [engine], or [onnx, engine].
+  formats: [onnx]
+  continue_on_error: false
+  options:
+    common:
+      imgsz: 640
+      batch: 1
+      device: 0
+    formats:
+      onnx:
+        opset: 17
+        dynamic: false
+        simplify: true
+        half: false
+        nms: false
+      engine:
+        half: true
+        int8: false
+        dynamic: false
+        workspace: 4
+        simplify: true
+        nms: false
+
+tracking:
+  uri: ${MLFLOW_TRACKING_URI:sqlite:///artifacts/mlflow/mlflow.db}
+  registry_uri: ${MLFLOW_REGISTRY_URI:sqlite:///artifacts/mlflow/mlflow.db}
+  experiment: ${MLFLOW_EXPERIMENT_NAME:edge-ai-mass-yolo-segmentation}
+  tags:
+    target_device: jetson_nano
+    owner: mlops
+  registry:
+    enabled: true
+    name: edge-ai-mass-yolo-segmentation
+    alias: candidate
+    artifact_path: model

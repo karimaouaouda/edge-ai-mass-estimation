@@ -61,14 +61,22 @@ class MediaRenderer:
 
         if return_depth_preview and result.depth_map is not None:
             path = self.media_dir / f"{workflow_id}-depth-preview.jpg"
-            self.write_depth_preview(result.depth_map, path)
+            preview_source = (
+                result.raw_depth_map
+                if result.raw_depth_map is not None
+                else result.depth_map
+            )
+            depth_metadata = self.write_depth_preview(preview_source, path)
+            depth_metadata["depth_source"] = (
+                "raw_model" if result.raw_depth_map is not None else "metric"
+            )
             jobs.append(
                 MediaUploadJob(
                     path=path,
                     media_type="depth_preview",
                     request_id=request_id,
                     correlation_id=correlation_id,
-                    metadata={},
+                    metadata=depth_metadata,
                 )
             )
 
@@ -134,20 +142,60 @@ class MediaRenderer:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(path), output)
 
-    def write_depth_preview(self, depth_map: np.ndarray, path: str | Path) -> None:
+    def write_depth_preview(
+        self,
+        depth_map: np.ndarray,
+        path: str | Path,
+    ) -> dict[str, object]:
         try:
             import cv2
         except ImportError as exc:
             raise RuntimeError("OpenCV is required to render depth previews") from exc
 
-        finite = np.asarray(depth_map, dtype=np.float32)
-        finite = finite[np.isfinite(finite)]
-        if finite.size == 0:
-            preview = np.zeros(depth_map.shape[:2], dtype=np.uint8)
+        depth = np.squeeze(np.asarray(depth_map, dtype=np.float32))
+        if depth.ndim != 2:
+            raise ValueError(f"Depth preview expects a 2-D map, got shape {depth.shape}")
+
+        valid_mask = np.isfinite(depth) & (depth > 0)
+        valid_values = depth[valid_mask]
+
+        normalized = np.zeros(depth.shape, dtype=np.uint8)
+        if valid_values.size:
+            low, high = np.percentile(valid_values, (2.0, 98.0)).astype(float)
+            dynamic_range = high - low
+            if dynamic_range <= max(abs(high), 1.0) * 1e-6:
+                normalized[valid_mask] = 127
+            else:
+                scaled = (depth[valid_mask] - low) / dynamic_range
+                normalized[valid_mask] = np.clip(scaled * 255.0, 0, 255).astype(np.uint8)
+            preview = cv2.applyColorMap(normalized, cv2.COLORMAP_TURBO)
+            preview[~valid_mask] = 0
+            min_value = float(np.min(valid_values))
+            max_value = float(np.max(valid_values))
         else:
-            min_value = float(np.min(finite))
-            max_value = float(np.max(finite))
-            denom = max(max_value - min_value, 1e-6)
-            preview = np.clip((depth_map - min_value) / denom * 255.0, 0, 255).astype(np.uint8)
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(path), preview)
+            low = high = min_value = max_value = 0.0
+            preview = np.full((*depth.shape, 3), 32, dtype=np.uint8)
+            cv2.putText(
+                preview,
+                "NO VALID DEPTH",
+                (10, max(24, depth.shape[0] // 2)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+
+        output_path = Path(path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if not cv2.imwrite(str(output_path), preview):
+            raise RuntimeError(f"OpenCV could not encode depth preview: {output_path}")
+
+        return {
+            "min_depth_value": min_value,
+            "max_depth_value": max_value,
+            "display_percentile_low": float(low),
+            "display_percentile_high": float(high),
+            "valid_pixel_percent": float(np.mean(valid_mask) * 100.0),
+            "visualization": "turbo_percentile_2_98",
+        }

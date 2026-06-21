@@ -49,8 +49,22 @@ edge-ai-mass calibrate --images data/calibration/ --output configs/calibration.j
 ## Training
 
 ```bash
-# Fine-tune YOLOv8 on your waste dataset
-python scripts/train_detector.py --config configs/models/yolov8_training.yaml
+# Inspect the governed YOLO pipeline and dataset mounts
+edge-ai-mass train --config configs/training/yolo_segmentation.yaml --dry-run
+
+# Preprocess, visualize, tune, train, evaluate, optionally export, and register
+edge-ai-mass train --stage detection --config configs/training/yolo_segmentation.yaml
+
+# Resume selected stages or load any Ultralytics checkpoint
+edge-ai-mass train --stage train,evaluate,export,register \
+    --config configs/training/yolo_segmentation.yaml \
+    --set model.checkpoint=models/weights/custom-seg.pt
+
+# Export only the selected best checkpoint to ONNX and TensorRT
+edge-ai-mass train --stage export \
+    --config configs/training/yolo_segmentation.yaml \
+    --set export.enabled=true \
+    --set 'export.formats=[onnx, engine]'
 
 # Collect features for mass regression
 python scripts/collect_mass_features.py \
@@ -61,6 +75,8 @@ python scripts/collect_mass_features.py \
 # Train mass regression head
 python scripts/train_mass_regression.py --config configs/models/mass_regression_training.yaml
 ```
+
+The YOLO pipeline uses DVC for data lineage, Optuna for persistent hyperparameter studies, and MLflow for experiment tracking and model registration. See `docs/training_pipeline.md` and `notebooks/yolo_training_pipeline.ipynb`.
 
 ## Jetson Deployment
 
@@ -94,6 +110,7 @@ See `docs/orchestrator.md` for GitHub Release manifests, Mosquitto commands, rol
 │   ├── calibration/           # Camera calibration
 │   ├── data/                  # Dataset + data prep
 │   ├── evaluation/            # Metrics + benchmarking
+│   ├── training/              # DVC, Optuna, MLflow training pipelines
 │   ├── models/                # Custom architectures
 │   ├── export/                # ONNX / TensorRT export
 │   └── utils/                 # Config, logging, image helpers

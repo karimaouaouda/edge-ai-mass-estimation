@@ -90,6 +90,7 @@ class ObjectEstimate:
 class PipelineResult:
     objects: list[ObjectEstimate] = field(default_factory=list)
     depth_map: np.ndarray | None = None
+    raw_depth_map: np.ndarray | None = None
     latency_ms: dict[str, float] = field(default_factory=dict)
     frame_time_ms: float = 0.0
 
@@ -280,6 +281,7 @@ class Pipeline:
         try:
             depth_result = self.stages["depth"].run(image)
             raw_depth_map: np.ndarray = depth_result.data
+            result.raw_depth_map = np.asarray(raw_depth_map, dtype=np.float32)
             valid_depth_mask = None
             if self.geometry_estimator is not None:
                 depth_map, valid_depth_mask = self.geometry_estimator.metric_depth(raw_depth_map)

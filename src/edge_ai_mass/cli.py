@@ -22,9 +22,6 @@ import json
 import logging
 import sys
 
-import cv2
-import numpy as np
-
 from edge_ai_mass.utils.logging import setup_logging
 
 
@@ -78,6 +75,36 @@ def main(argv: list[str] | None = None) -> None:
         help="Submit one telemetry payload and exit",
     )
 
+    p_train = sub.add_parser("train", help="Run the governed model training pipeline")
+    p_train.add_argument(
+        "--config",
+        default="configs/training/yolo_segmentation.yaml",
+        help="Training pipeline YAML configuration",
+    )
+    p_train.add_argument(
+        "--stage",
+        default="all",
+        help=(
+            "all/detection/yolo, or comma-separated "
+            "preprocess,tune,train,evaluate,export,register"
+        ),
+    )
+    p_train.add_argument(
+        "--set",
+        dest="overrides",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Override YAML with dotted.path=value (repeatable)",
+    )
+    p_train.add_argument("--skip-optuna", action="store_true", help="Skip tuning when running all")
+    p_train.add_argument("--dry-run", action="store_true", help="Validate and print the execution plan")
+    p_train.add_argument(
+        "--force",
+        action="store_true",
+        help="Permit changed config under the same run name and repeat registration",
+    )
+
     args = parser.parse_args(argv)
     setup_logging(args.log_level)
 
@@ -93,6 +120,8 @@ def main(argv: list[str] | None = None) -> None:
         _cmd_orchestrator(args)
     elif args.command == "agent":
         _cmd_agent(args)
+    elif args.command == "train":
+        _cmd_train(args)
     else:
         parser.print_help()
         sys.exit(1)
@@ -102,6 +131,8 @@ def main(argv: list[str] | None = None) -> None:
 # Sub-commands
 # ------------------------------------------------------------------
 def _cmd_infer(args: argparse.Namespace) -> None:
+    import cv2
+
     from edge_ai_mass.pipeline.factory import build_pipeline
 
     pipeline = build_pipeline(args.config)
@@ -155,6 +186,8 @@ def _cmd_infer(args: argparse.Namespace) -> None:
 
 
 def _cmd_demo(args: argparse.Namespace) -> None:
+    import cv2
+
     from edge_ai_mass.pipeline.factory import build_pipeline
 
     pipeline = build_pipeline(args.config)
@@ -254,11 +287,28 @@ def _cmd_agent(args: argparse.Namespace) -> None:
     EdgeDeviceAgent(config, secret_store=secret_store).run_forever()
 
 
+def _cmd_train(args: argparse.Namespace) -> None:
+    from edge_ai_mass.training import TrainingPipeline
+
+    pipeline = TrainingPipeline.from_config(args.config, overrides=args.overrides)
+    if args.dry_run:
+        result = pipeline.plan(args.stage, skip_optuna=args.skip_optuna)
+    else:
+        result = pipeline.run(
+            args.stage,
+            skip_optuna=args.skip_optuna,
+            force=args.force,
+        )
+    print(json.dumps(result, indent=2, default=str))
+
+
 # ------------------------------------------------------------------
 # Visualisation
 # ------------------------------------------------------------------
-def _draw_results(image: np.ndarray, result) -> np.ndarray:
+def _draw_results(image, result):
     """Draw bounding boxes and mass labels on the image."""
+    import cv2
+
     out = image.copy()
     for obj in result.objects:
         d = obj.detection

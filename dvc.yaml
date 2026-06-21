@@ -1,0 +1,15 @@
+stages:
+  yolo_dataset:
+    cmd: >-
+      edge-ai-mass train --stage preprocess
+      --config configs/training/yolo_segmentation.yaml
+      --set data.visualization.enabled=false
+    deps:
+      - configs/training/yolo_segmentation.yaml
+      - src/edge_ai_mass/training
+      - data/raw/taco
+      - data/raw/aquatrash
+      - data/raw/RealWaste
+      - data/normalized/realwaste
+    outs:
+      - data/processed/waste_seg_yolo
