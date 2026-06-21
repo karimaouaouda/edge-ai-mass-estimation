@@ -107,7 +107,19 @@ def _cmd_infer(args: argparse.Namespace) -> None:
     pipeline = build_pipeline(args.config)
     pipeline.load_all()
 
-    image = cv2.imread(args.image)
+    # check if the image is a numlber, treat as a camera source so the image is taken by capture a frame
+    if args.image.isdigit():
+        cap = cv2.VideoCapture(int(args.image))
+        if not cap.isOpened():
+            logging.error("Cannot open camera %s", args.image)
+            sys.exit(1)
+        ret, image = cap.read()
+        cap.release()
+        if not ret:
+            logging.error("Cannot read frame from camera %s", args.image)
+            sys.exit(1)
+    else:
+        image = cv2.imread(args.image)
     if image is None:
         logging.error("Cannot read image: %s", args.image)
         sys.exit(1)
