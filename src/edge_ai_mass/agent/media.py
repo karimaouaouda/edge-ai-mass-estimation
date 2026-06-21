@@ -50,7 +50,12 @@ class MediaRenderer:
                     media_type="annotated",
                     request_id=request_id,
                     correlation_id=correlation_id,
-                    metadata={"object_count": len(result.objects)},
+                    metadata={
+                        "object_count": len(result.objects),
+                        "segmentation_mask_count": sum(
+                            obj.detection.mask is not None for obj in result.objects
+                        ),
+                    },
                 )
             )
 

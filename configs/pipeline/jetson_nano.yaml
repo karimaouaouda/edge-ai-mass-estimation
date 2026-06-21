@@ -32,10 +32,13 @@ geometry:
 stages:
   detection:
     latency_budget_ms: 120
+    # Keep valid segmentation masks even when Jetson inference exceeds the target latency.
+    fallback_on_latency_exceeded: false
     primary:
       class: edge_ai_mass.modules.detection.yolo_detector.YOLODetector
       params:
-        model_path: models/weights/yolov8n-seg.engine  # TensorRT FP16
+        model_path: models/weights/yolo-seg-best.pt
+        task: segment
         conf_threshold: 0.30
         iou_threshold: 0.45
         img_size: 480  # smaller for speed

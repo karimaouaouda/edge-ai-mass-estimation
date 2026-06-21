@@ -12,7 +12,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from edge_ai_mass.modules.base import BaseModule
+from edge_ai_mass.modules.base import BaseModule, ModuleResult
 from edge_ai_mass.pipeline.pipeline import Detection
 
 logger = logging.getLogger(__name__)
@@ -40,18 +40,25 @@ class YOLODetector(BaseModule):
         self.conf_threshold: float = config.get("conf_threshold", 0.25)
         self.iou_threshold: float = config.get("iou_threshold", 0.45)
         self.img_size: int = config.get("img_size", 640)
+        self.task: str = str(config.get("task", "segment"))
         self.class_map: dict[int, str] | None = config.get("class_map")
         self._model: Any = None
 
     def load(self) -> None:
         from ultralytics import YOLO
 
-        print(f"Loading YOLO model from {self.model_path}")
-        logger.info("Loading YOLO model from %s", self.model_path)
-        self._model = YOLO(self.model_path, task="segment")
+        print(f"Loading YOLO {self.task} model from {self.model_path}")
+        logger.info("Loading YOLO %s model from %s", self.task, self.model_path)
+        self._model = YOLO(self.model_path, task=self.task)
+        model_task = str(getattr(self._model, "task", self.task))
+        if self.task == "segment" and model_task != "segment":
+            raise RuntimeError(
+                f"YOLO model {self.model_path!r} loaded as task {model_task!r}, "
+                "but segmentation was configured"
+            )
         self._is_loaded = True
 
-    def _forward(self, image: np.ndarray, **kwargs: Any) -> list[Detection]:
+    def _forward(self, image: np.ndarray, **kwargs: Any) -> ModuleResult:
         results = self._model.predict(
             image,
             conf=self.conf_threshold,
@@ -68,8 +75,8 @@ class YOLODetector(BaseModule):
             for i, box in enumerate(boxes):
                 cls_id = int(box.cls[0])
                 mask = None
-                if masks is not None:
-                    mask = masks.data[i].cpu().numpy().astype(np.uint8)
+                if masks is not None and i < len(masks.data):
+                    mask = (masks.data[i].cpu().numpy() > 0.5).astype(np.uint8)
                     if mask.shape[:2] != (image_h, image_w):
                         mask = cv2.resize(mask, (image_w, image_h), interpolation=cv2.INTER_NEAREST)
                 detections.append(
@@ -81,7 +88,21 @@ class YOLODetector(BaseModule):
                         confidence=float(box.conf[0]),
                     )
                 )
-        return detections
+        mask_count = sum(detection.mask is not None for detection in detections)
+        if self.task == "segment" and detections and mask_count != len(detections):
+            logger.warning(
+                "YOLO segmentation model returned %d detections but only %d masks",
+                len(detections),
+                mask_count,
+            )
+        return ModuleResult(
+            data=detections,
+            metadata={
+                "model_path": self.model_path,
+                "model_task": str(getattr(self._model, "task", self.task)),
+                "mask_count": mask_count,
+            },
+        )
 
 
 def _class_name(names: Any, cls_id: int) -> str:

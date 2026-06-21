@@ -6,6 +6,7 @@ from edge_ai_mass.modules.base import ModuleResult
 from edge_ai_mass.pipeline.pipeline import (
     Detection,
     Pipeline,
+    Stage,
     _crop,
     _depth_stats_for_detection,
 )
@@ -16,6 +17,16 @@ class FixedStage:
         self.result = result
 
     def run(self, _image, **_kwargs):
+        return self.result
+
+
+class FixedModule:
+    def __init__(self, result):
+        self.result = result
+        self.calls = 0
+
+    def predict(self, _image, **_kwargs):
+        self.calls += 1
         return self.result
 
 
@@ -72,6 +83,25 @@ def test_depth_stats_bbox_only():
     stats = _depth_stats_for_detection(depth, det)
     assert "mean" in stats
     assert "median" in stats
+
+
+def test_stage_keeps_slow_segmentation_primary_when_latency_fallback_is_disabled():
+    primary = FixedModule(ModuleResult([], latency_ms=350.0, metadata={"mask_count": 2}))
+    fallback = FixedModule(ModuleResult([], latency_ms=5.0))
+    stage = Stage(
+        "detection",
+        primary,
+        fallback,
+        latency_budget_ms=120.0,
+        fallback_on_latency_exceeded=False,
+    )
+
+    result = stage.run(np.zeros((8, 8, 3), dtype=np.uint8))
+
+    assert result.metadata["source"] == "detection.primary"
+    assert result.metadata["latency_budget_exceeded"] is True
+    assert primary.calls == 1
+    assert fallback.calls == 0
 
 
 def test_pipeline_reports_completed_skipped_stages_when_no_objects_are_detected():

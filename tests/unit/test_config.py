@@ -34,3 +34,12 @@ def test_merge_configs():
     assert result["x"] == 2
     assert result["nested"]["a"] == 1
     assert result["nested"]["b"] == 3
+
+
+def test_jetson_pipeline_uses_installed_segmentation_checkpoint():
+    cfg = load_config("configs/pipeline/jetson_nano.yaml")
+    detection = cfg["stages"]["detection"]
+
+    assert detection["primary"]["params"]["model_path"] == "models/weights/yolo-seg-best.pt"
+    assert detection["primary"]["params"]["task"] == "segment"
+    assert detection["fallback_on_latency_exceeded"] is False

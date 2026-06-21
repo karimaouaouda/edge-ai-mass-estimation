@@ -63,6 +63,9 @@ def build_pipeline(config_path: str) -> Pipeline:
                 primary=primary,
                 fallback=fallback,
                 latency_budget_ms=budget,
+                fallback_on_latency_exceeded=bool(
+                    stage_cfg.get("fallback_on_latency_exceeded", True)
+                ),
             ),
         )
         logger.info(

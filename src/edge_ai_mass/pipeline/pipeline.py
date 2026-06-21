@@ -128,27 +128,44 @@ class Stage:
         primary: BaseModule,
         fallback: BaseModule | None = None,
         latency_budget_ms: float = float("inf"),
+        fallback_on_latency_exceeded: bool = True,
     ) -> None:
         self.name = name
         self.primary = primary
         self.fallback = fallback
         self.latency_budget_ms = latency_budget_ms
+        self.fallback_on_latency_exceeded = fallback_on_latency_exceeded
         self.primary_available = True
+        self.primary_error: str | None = None
 
     def run(self, image: np.ndarray, **kwargs: Any) -> ModuleResult:
+        fallback_reason = "primary_unavailable"
+        primary_error = self.primary_error
         if self.primary_available:
             try:
                 result = self.primary.predict(image, **kwargs)
-                if result.latency_ms <= self.latency_budget_ms:
+                latency_exceeded = result.latency_ms > self.latency_budget_ms
+                if not latency_exceeded or not self.fallback_on_latency_exceeded:
                     result.metadata["source"] = f"{self.name}.primary"
+                    if latency_exceeded:
+                        result.metadata["latency_budget_exceeded"] = True
                     return result
+                if self.fallback is None:
+                    result.metadata["source"] = f"{self.name}.primary"
+                    result.metadata["latency_budget_exceeded"] = True
+                    return result
+                fallback_reason = "latency_budget_exceeded"
                 logger.warning(
                     "%s primary exceeded budget (%.1f ms > %.1f ms) — trying fallback",
                     self.name,
                     result.latency_ms,
                     self.latency_budget_ms,
                 )
-            except Exception:
+            except Exception as exc:
+                if self.fallback is None:
+                    raise
+                fallback_reason = "primary_error"
+                primary_error = str(exc)
                 logger.exception("%s primary failed — trying fallback", self.name)
 
         if self.fallback is None:
@@ -156,6 +173,9 @@ class Stage:
 
         result = self.fallback.predict(image, **kwargs)
         result.metadata["source"] = f"{self.name}.fallback"
+        result.metadata["fallback_reason"] = fallback_reason
+        if primary_error:
+            result.metadata["primary_error"] = primary_error
         return result
 
 
@@ -190,6 +210,7 @@ class Pipeline:
                     raise
                 logger.warning("%s primary failed during load; disabling primary: %s", name, exc)
                 stage.primary_available = False
+                stage.primary_error = str(exc)
             if stage.fallback is not None:
                 stage.fallback.load()
         self._is_ready = True
@@ -232,7 +253,15 @@ class Pipeline:
             {
                 "latency_ms": float(det_result.latency_ms),
                 "object_count": len(detections),
+                "segmentation_mask_count": sum(det.mask is not None for det in detections),
                 "module": det_result.metadata.get("source"),
+                "model_path": det_result.metadata.get("model_path"),
+                "model_task": det_result.metadata.get("model_task"),
+                "fallback_reason": det_result.metadata.get("fallback_reason"),
+                "primary_error": det_result.metadata.get("primary_error"),
+                "latency_budget_exceeded": bool(
+                    det_result.metadata.get("latency_budget_exceeded", False)
+                ),
             },
         )
 
