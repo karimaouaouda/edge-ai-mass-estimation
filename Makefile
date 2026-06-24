@@ -1,4 +1,4 @@
-.PHONY: install dev test lint format export-onnx export-trt clean
+.PHONY: install dev test lint format export-onnx export-trt kaggle-prepare kaggle-publish clean
 
 install:
 	pip install -e .
@@ -21,6 +21,12 @@ export-onnx:
 
 export-trt:
 	python scripts/export_tensorrt.py --model models/weights/yolov8n-seg.pt --format engine --half
+
+kaggle-prepare:
+	python scripts/publish_kaggle_training.py prepare --force
+
+kaggle-publish:
+	python scripts/publish_kaggle_training.py publish
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +

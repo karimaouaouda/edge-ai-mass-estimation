@@ -1,15 +1,31 @@
 {
-  "id": "karimaouaouda/waste-segmentation-yolov26n-v0",
-  "title": "Waste Segmentation YOLOv26n v0",
-  "code_file": "notebooks/merge_taco_aquatrash_yolo26n_kaggle.ipynb",
+  "id": "karimaouaouda/train-pipeline",
+  "title": "Edge AI Mass YOLO Training Pipeline",
+  "code_file": "notebooks/yolo_training_pipeline.ipynb",
   "language": "python",
   "kernel_type": "notebook",
   "is_private": true,
   "enable_gpu": true,
+  "enable_tpu": false,
   "enable_internet": true,
+  "keywords": [
+    "gpu",
+    "computer-vision",
+    "image-segmentation",
+    "mlops",
+    "optuna"
+  ],
   "dataset_sources": [
+    "karimaouaouda/edge-ai-mass-module",
     "harshpanwar/aquatrash",
-    "karimaouaouda/aquatrash-segmantations"
-  ]
+    "karimaouaouda/aqua_seg",
+    "joebeachcapital/realwaste"
+  ],
+  "kernel_sources": [
+    "karimaouaouda/segment-realwaste"
+  ],
+  "competition_sources": [],
+  "model_sources": [],
+  "docker_image": "",
+  "machine_shape": "NvidiaTeslaT4"
 }
-

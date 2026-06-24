@@ -76,7 +76,21 @@ python scripts/collect_mass_features.py \
 python scripts/train_mass_regression.py --config configs/models/mass_regression_training.yaml
 ```
 
-The YOLO pipeline uses DVC for data lineage, Optuna for persistent hyperparameter studies, and MLflow for experiment tracking and model registration. See `docs/training_pipeline.md` and `notebooks/yolo_training_pipeline.ipynb`.
+The YOLO pipeline uses DVC for data lineage, Optuna for persistent hyperparameter studies, and MLflow for experiment tracking and model registration. See `docs/training_pipeline.md`, `docs/kaggle_training_guide.md`, and `notebooks/yolo_training_pipeline.ipynb`.
+
+Prepare and directly publish the importable module dataset plus GPU training kernel:
+
+```bash
+python scripts/publish_kaggle_training.py prepare --force
+python scripts/publish_kaggle_training.py publish
+```
+
+From Bash, publish only a new module-dataset version and wait until it is ready:
+
+```bash
+bash scripts/publish_kaggle_dataset.sh \
+  --message "Publish updated training module"
+```
 
 ## Jetson Deployment
 

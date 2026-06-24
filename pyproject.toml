@@ -58,7 +58,7 @@ mlops = [
     "optuna>=4.0",
 ]
 orchestration = [
-    "kaggle>=1.6",
+    "kaggle>=2.2.2",
     "paho-mqtt>=2.1",
     "psutil>=5.9",
 ]

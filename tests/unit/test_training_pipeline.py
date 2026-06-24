@@ -10,7 +10,7 @@ from PIL import Image
 
 from edge_ai_mass.training.config import TrainingConfig, TrainingConfigError, normalize_stages
 from edge_ai_mass.training.pipeline import TrainingPipeline
-from edge_ai_mass.training.preprocessing import build_yolo_dataset
+from edge_ai_mass.training.preprocessing import DatasetBuildError, build_yolo_dataset
 from edge_ai_mass.training.state import PipelineState
 from edge_ai_mass.training.tracking import normalize_uri
 from edge_ai_mass.training.visualization import create_dataset_visualizations
@@ -59,18 +59,77 @@ def _source(root: Path, name: str, label: str, *, image_label_field: bool = Fals
         "annotations": str(annotations_path),
         "images": str(source_dir),
         "resolver": "direct",
-        "category_mapping": {label: "class_a"},
+        "category_mapping": {label: "mixed_waste"},
     }
     if image_label_field:
         result["category_from_image_field"] = "source_class_name"
     return result
 
 
+def _realwaste_source(root: Path) -> dict:
+    """Model the raw nested tree plus a separately uploaded segmentation JSON."""
+    images_root = root / "realwaste-main" / "RealWaste"
+    original_class = images_root / "Foreign Folder Label"
+    original_class.mkdir(parents=True)
+    images = []
+    annotations = []
+    for index in range(4):
+        source_name = f"Foreign Folder Label/{index}.jpg"
+        Image.new("RGB", (32, 24), color=(index * 30, 20, 40)).save(images_root / source_name)
+        images.append(
+            {
+                "id": index + 1,
+                # The flattened output does not exist in the raw dataset; the
+                # source path is resolved after stripping the dataset prefix.
+                "file_name": f"flattened-{index}.jpg",
+                "source_file_name": f"realwaste-main/RealWaste/{source_name}",
+                "width": 32,
+                "height": 24,
+            }
+        )
+        annotations.append(
+            {
+                "id": index + 1,
+                "image_id": index + 1,
+                "category_id": 1,
+                "bbox": [2, 3, 12, 10],
+                "segmentation": [[2, 3, 14, 3, 14, 13, 2, 13]],
+            }
+        )
+    annotations_dir = root / "realwaste-annotations"
+    annotations_dir.mkdir()
+    annotations_path = annotations_dir / "annotations.json"
+    annotations_path.write_text(
+        json.dumps(
+            {
+                "images": images,
+                "annotations": annotations,
+                # This project label—not "Foreign Folder Label"—must control
+                # every generated YOLO class id.
+                "categories": [{"id": 1, "name": "mixed_waste"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "name": "realwaste",
+        "annotations": str(annotations_path),
+        # Intentionally provide the parent mount, matching common Kaggle usage.
+        "images": str(root),
+        "images_root_candidates": ["realwaste-main/RealWaste", "RealWaste", "."],
+        "file_name_fields": ["source_file_name", "file_name"],
+        "strip_path_prefixes": ["realwaste-main/RealWaste", "RealWaste"],
+        "recursive_basename_fallback": True,
+        "resolver": "direct",
+        "require_category_names_in_data_classes": True,
+    }
+
+
 def _config(tmp_path: Path) -> TrainingConfig:
     sources = [
         _source(tmp_path, "taco", "raw_a"),
         _source(tmp_path, "aquatrash", "raw_a"),
-        _source(tmp_path, "realwaste", "Folder A", image_label_field=True),
+        _realwaste_source(tmp_path),
     ]
     payload = {
         "project": {
@@ -81,7 +140,7 @@ def _config(tmp_path: Path) -> TrainingConfig:
         },
         "data": {
             "output_dir": "processed",
-            "classes": ["class_a"],
+            "classes": ["mixed_waste"],
             "materialize": "copy",
             "split": {"train": 0.5, "val": 0.25, "test": 0.25, "seed": 7},
             "quality": {"min_images": 1, "min_instances": 1, "require_all_classes": True},
@@ -102,10 +161,53 @@ def test_preprocessing_merges_three_coco_sources(tmp_path: Path):
     assert manifest["total_images"] == 12
     assert manifest["total_instances"] == 12
     assert set(manifest["sources"]) == {"taco", "aquatrash", "realwaste"}
+    assert manifest["sources"]["realwaste"]["classes"] == {"mixed_waste": 4}
+    assert manifest["sources"]["realwaste"]["image_resolution"] == {
+        "prefix_stripped:source_file_name": 4
+    }
+    assert Path(manifest["sources"]["realwaste"]["images_root_resolved"]).name == "RealWaste"
     assert sum(item["images"] for item in manifest["splits"].values()) == 12
     assert (config.dataset_dir / "dataset.yaml").is_file()
     label = next((config.dataset_dir / "labels" / "train").rglob("*.txt"))
     assert label.read_text(encoding="utf-8").startswith("0 ")
+
+
+def test_realwaste_rejects_legacy_non_project_categories(tmp_path: Path):
+    config = _config(tmp_path)
+    source = next(item for item in config.payload["data"]["sources"] if item["name"] == "realwaste")
+    annotations_path = Path(source["annotations"])
+    payload = json.loads(annotations_path.read_text(encoding="utf-8"))
+    payload["categories"] = [{"id": 1, "name": "trash"}]
+    annotations_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DatasetBuildError, match="categories must be names from data.classes"):
+        build_yolo_dataset(config)
+
+
+def test_realwaste_failure_prints_bounded_structured_debug(tmp_path: Path, capsys):
+    config = _config(tmp_path)
+    empty_mount = tmp_path / "empty-realwaste-mount"
+    empty_mount.mkdir()
+    source = next(item for item in config.payload["data"]["sources"] if item["name"] == "realwaste")
+    source["images"] = str(empty_mount)
+    config.payload["data"]["debug"] = {
+        "enabled": True,
+        "sample_limit": 1,
+        "progress_every": 4,
+        "root_entry_limit": 5,
+    }
+
+    with pytest.raises(DatasetBuildError, match="missing image fraction 100.000%"):
+        build_yolo_dataset(config)
+
+    output = capsys.readouterr().out
+    assert '"event": "image_root.before"' in output
+    assert '"event": "image_root.candidate"' in output
+    assert '"event": "image.resolve.before"' in output
+    assert '"event": "image.resolve.after"' in output
+    assert '"event": "source.progress"' in output
+    assert '"event": "quality.failed"' in output
+    assert output.count('"event": "image.resolve.before"') == 3
 
 
 def test_plan_and_stage_aliases_do_not_start_training(tmp_path: Path):

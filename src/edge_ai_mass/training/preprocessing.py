@@ -46,9 +46,18 @@ class DatasetBuildError(RuntimeError):
     """Raised when dataset quality or source contracts are violated."""
 
 
+def _emit_debug(debug_cfg: dict[str, Any], event: str, **details: Any) -> None:
+    """Print one structured diagnostic line that remains readable on Kaggle."""
+    if not debug_cfg.get("enabled", False):
+        return
+    payload = {"event": event, **details}
+    print(f"[dataset-debug] {json.dumps(payload, sort_keys=True, default=str)}", flush=True)
+
+
 def build_yolo_dataset(config: TrainingConfig) -> dict[str, Any]:
     """Merge configured COCO sources into one deterministic YOLO dataset."""
     data_cfg = config.payload["data"]
+    debug_cfg = data_cfg.get("debug", {})
     # Rebuild whenever the stage is invoked. DVC decides whether invocation is
     # necessary; silently short-circuiting on config alone would miss changed
     # images or annotations and break data lineage.
@@ -58,14 +67,31 @@ def build_yolo_dataset(config: TrainingConfig) -> dict[str, Any]:
     records: list[ImageRecord] = []
     source_reports: dict[str, Any] = {}
     input_versions: dict[str, Any] = {}
+    _emit_debug(
+        debug_cfg,
+        "build.before",
+        project_root=config.project_root,
+        output_dir=config.dataset_dir,
+        classes=classes,
+        configured_sources=[item.get("name") for item in data_cfg["sources"]],
+    )
 
     for source_cfg in data_cfg["sources"]:
         if not source_cfg.get("enabled", True):
+            _emit_debug(debug_cfg, "source.skipped", source=source_cfg.get("name"))
             continue
+        _emit_debug(debug_cfg, "source.before", source=source_cfg.get("name"))
         source_records, report, version = _read_coco_source(config, source_cfg, class_to_id)
         records.extend(source_records)
         source_reports[str(source_cfg["name"])] = report
         input_versions[str(source_cfg["name"])] = version
+        _emit_debug(
+            debug_cfg,
+            "source.after",
+            source=source_cfg.get("name"),
+            report=report,
+            version=version,
+        )
 
     quality_cfg = data_cfg.get("quality", {})
     if len(records) < int(quality_cfg.get("min_images", 1)):
@@ -80,8 +106,22 @@ def build_yolo_dataset(config: TrainingConfig) -> dict[str, Any]:
             f"{quality_cfg.get('min_instances', 1)}"
         )
 
+    _emit_debug(
+        debug_cfg,
+        "merge.after",
+        total_images=len(records),
+        total_instances=instance_count,
+    )
     _assign_splits(records, data_cfg.get("split", {}))
-    return _materialize(config, records, classes, source_reports, input_versions)
+    manifest = _materialize(config, records, classes, source_reports, input_versions)
+    _emit_debug(
+        debug_cfg,
+        "build.after",
+        dataset_fingerprint=manifest.get("dataset_fingerprint"),
+        total_images=manifest.get("total_images"),
+        total_instances=manifest.get("total_instances"),
+    )
+    return manifest
 
 
 def inspect_sources(config: TrainingConfig) -> list[dict[str, Any]]:
@@ -89,7 +129,12 @@ def inspect_sources(config: TrainingConfig) -> list[dict[str, Any]]:
     result = []
     for source in config.payload["data"]["sources"]:
         annotations = config.path(source["annotations"])
-        images = config.path(source["images"])
+        configured_images = config.path(source["images"])
+        images = _resolve_source_images_root(
+            config,
+            source,
+            debug_cfg=config.payload["data"].get("debug", {}),
+        )
         result.append(
             {
                 "name": source["name"],
@@ -97,6 +142,7 @@ def inspect_sources(config: TrainingConfig) -> list[dict[str, Any]]:
                 "required": bool(source.get("required", True)),
                 "annotations": str(annotations),
                 "annotations_exist": annotations.is_file(),
+                "images_configured": str(configured_images),
                 "images": str(images),
                 "images_exist": images.is_dir(),
             }
@@ -110,9 +156,27 @@ def _read_coco_source(
     class_to_id: dict[str, int],
 ) -> tuple[list[ImageRecord], dict[str, Any], dict[str, Any]]:
     name = str(source_cfg["name"]).strip().lower()
+    debug_cfg = config.payload["data"].get("debug", {})
     annotations_path = config.path(source_cfg["annotations"])
-    images_root = config.path(source_cfg["images"])
+    configured_images_root = config.path(source_cfg["images"])
+    _emit_debug(
+        debug_cfg,
+        "source.paths.before",
+        source=name,
+        annotations=annotations_path,
+        annotations_exists=annotations_path.is_file(),
+        images_configured=configured_images_root,
+        images_configured_exists=configured_images_root.is_dir(),
+    )
+    images_root = _resolve_source_images_root(config, source_cfg, debug_cfg=debug_cfg)
     required = bool(source_cfg.get("required", True))
+    _emit_debug(
+        debug_cfg,
+        "source.paths.after",
+        source=name,
+        images_resolved=images_root,
+        images_resolved_exists=images_root.is_dir(),
+    )
     if not annotations_path.is_file() or not images_root.is_dir():
         message = (
             f"Dataset source '{name}' is unavailable: annotations={annotations_path} "
@@ -123,12 +187,42 @@ def _read_coco_source(
         logger.warning("%s; optional source skipped", message)
         return [], {"skipped": True, "reason": message}, {}
 
+    _emit_debug(debug_cfg, "coco.load.before", source=name, path=annotations_path)
     payload = json.loads(annotations_path.read_text(encoding="utf-8"))
     if not isinstance(payload.get("images"), list) or not isinstance(
         payload.get("annotations"), list
     ):
         raise DatasetBuildError(f"COCO file has no images/annotations arrays: {annotations_path}")
     categories = {int(item["id"]): item for item in payload.get("categories", [])}
+    _emit_debug(
+        debug_cfg,
+        "coco.load.after",
+        source=name,
+        images=len(payload["images"]),
+        annotations=len(payload["annotations"]),
+        categories=list(categories.values()),
+        first_images=payload["images"][:3],
+    )
+    if source_cfg.get("require_category_names_in_data_classes", False):
+        # RealWaste raw directory names describe the source dataset taxonomy,
+        # not this model's targets. Requiring canonical COCO category names
+        # prevents an old one-class `trash` file from being trained silently.
+        category_names = {str(item.get("name", "")).strip() for item in categories.values()}
+        invalid_names = sorted(name for name in category_names if name not in class_to_id)
+        _emit_debug(
+            debug_cfg,
+            "categories.validate.before",
+            source=name,
+            category_names=sorted(category_names),
+            allowed_names=sorted(class_to_id),
+            invalid_names=invalid_names,
+        )
+        if not category_names or invalid_names:
+            raise DatasetBuildError(
+                f"Source '{name}' COCO categories must be names from data.classes; "
+                f"invalid={invalid_names or ['<no categories>']}"
+            )
+        _emit_debug(debug_cfg, "categories.validate.after", source=name, status="passed")
     annotations_by_image: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for annotation in payload["annotations"]:
         annotations_by_image[int(annotation["image_id"])].append(annotation)
@@ -141,26 +235,123 @@ def _read_coco_source(
     task = config.payload["model"].get("task", "segment")
     multipart_policy = str(config.payload["data"].get("multipart_policy", "largest"))
     file_name_fields = source_cfg.get("file_name_fields", ["file_name"])
+    strip_path_prefixes = source_cfg.get("strip_path_prefixes", [])
+    # A recursive index is built once per source, not once per annotation. It
+    # lets a COCO JSON reference a flattened filename while raw RealWaste stays
+    # organized under its original class directories.
+    _emit_debug(
+        debug_cfg,
+        "image_index.before",
+        source=name,
+        root=images_root,
+        enabled=bool(source_cfg.get("recursive_basename_fallback", False)),
+    )
+    basename_index = (
+        _build_unique_basename_index(images_root)
+        if source_cfg.get("recursive_basename_fallback", False)
+        else {}
+    )
+    _emit_debug(
+        debug_cfg,
+        "image_index.after",
+        source=name,
+        root=images_root,
+        indexed_names=len(basename_index),
+        unique_names=sum(path is not None for path in basename_index.values()),
+        ambiguous_names=sum(path is None for path in basename_index.values()),
+    )
     report: dict[str, Any] = {
         "images_declared": len(payload["images"]),
+        "images_root_configured": str(configured_images_root),
+        "images_root_resolved": str(images_root),
         "images": 0,
         "instances": 0,
         "missing_images": 0,
+        "missing_image_examples": [],
         "empty_images": 0,
         "invalid_annotations": 0,
         "unmapped_annotations": 0,
         "bbox_fallbacks": 0,
         "multipart_reduced": 0,
         "dimension_mismatches": 0,
+        "image_resolution": Counter(),
         "classes": Counter(),
     }
     records: list[ImageRecord] = []
 
-    for image_data in payload["images"]:
-        image_path, source_name = _resolve_image(images_root, image_data, file_name_fields)
+    sample_limit = max(0, int(debug_cfg.get("sample_limit", 25)))
+    progress_every = max(0, int(debug_cfg.get("progress_every", 250)))
+    total_declared = len(payload["images"])
+    for image_index, image_data in enumerate(payload["images"], start=1):
+        if image_index <= sample_limit:
+            _emit_debug(
+                debug_cfg,
+                "image.resolve.before",
+                source=name,
+                index=image_index,
+                image_id=image_data.get("id"),
+                references={
+                    field_name: image_data.get(field_name)
+                    for field_name in file_name_fields
+                    if image_data.get(field_name)
+                },
+                images_root=images_root,
+            )
+        image_path, source_name, resolution = _resolve_image(
+            images_root,
+            image_data,
+            file_name_fields,
+            strip_path_prefixes=strip_path_prefixes,
+            basename_index=basename_index,
+        )
+        should_trace = image_index <= sample_limit
         if image_path is None:
             report["missing_images"] += 1
+            report["image_resolution"][resolution] += 1
+            if len(report["missing_image_examples"]) < 10:
+                report["missing_image_examples"].append(
+                    {
+                        "image_id": image_data.get("id"),
+                        "references": {
+                            field_name: image_data.get(field_name)
+                            for field_name in file_name_fields
+                            if image_data.get(field_name)
+                        },
+                    }
+                )
+            should_trace = should_trace or report["missing_images"] <= sample_limit
+        if should_trace:
+            _emit_debug(
+                debug_cfg,
+                "image.resolve.after",
+                source=name,
+                index=image_index,
+                image_id=image_data.get("id"),
+                resolved=image_path,
+                resolution=resolution,
+                trace=_trace_image_resolution(
+                    images_root,
+                    image_data,
+                    file_name_fields,
+                    strip_path_prefixes,
+                    basename_index,
+                ),
+            )
+        if progress_every and (
+            image_index % progress_every == 0 or image_index == total_declared
+        ):
+            _emit_debug(
+                debug_cfg,
+                "source.progress",
+                source=name,
+                processed=image_index,
+                declared=total_declared,
+                resolved=image_index - report["missing_images"],
+                missing=report["missing_images"],
+            )
+        if image_path is None:
             continue
+        report["image_resolution"][resolution] += 1
         with Image.open(image_path) as image:
             actual_width, actual_height = image.size
         declared_width = int(image_data.get("width") or actual_width)
@@ -178,6 +369,9 @@ def _read_coco_source(
         )
         for annotation_data in annotations_by_image.get(record.source_id, []):
             category = categories.get(int(annotation_data.get("category_id", -1)), {})
+            # COCO category names are authoritative by default. An image-level
+            # override exists only for legacy sources and is not used by the new
+            # RealWaste contract, whose folder classes are unrelated labels.
             label_override = image_data.get(image_label_field) if image_label_field else None
             target_label = resolve_category(
                 category,
@@ -234,6 +428,8 @@ def _read_coco_source(
         report["images"] += 1
 
     report["classes"] = dict(sorted(report["classes"].items()))
+    report["image_resolution"] = dict(sorted(report["image_resolution"].items()))
+    _emit_debug(debug_cfg, "source.read.after", source=name, report=report)
     version = {
         "annotations_sha256": _sha256_file(annotations_path),
         "images_digest": _aggregate_image_digest(records),
@@ -241,24 +437,188 @@ def _read_coco_source(
     return records, report, version
 
 
+def _resolve_source_images_root(
+    config: TrainingConfig,
+    source_cfg: dict[str, Any],
+    *,
+    debug_cfg: dict[str, Any] | None = None,
+) -> Path:
+    """Resolve an image root that may point above a dataset's internal tree."""
+    debug_cfg = debug_cfg or {}
+    configured = config.path(source_cfg["images"])
+    suffixes = source_cfg.get("images_root_candidates", ["."])
+    _emit_debug(
+        debug_cfg,
+        "image_root.before",
+        source=source_cfg.get("name"),
+        configured=configured,
+        configured_exists=configured.is_dir(),
+        candidates=suffixes,
+    )
+    for raw_suffix in suffixes:
+        suffix = Path(str(raw_suffix).replace("\\", "/"))
+        # Candidate suffixes are trusted configuration, but keeping them
+        # relative prevents accidental traversal outside the selected mount.
+        if suffix.is_absolute() or ".." in suffix.parts:
+            raise DatasetBuildError(
+                f"Source '{source_cfg['name']}' has unsafe images_root_candidates entry: "
+                f"{raw_suffix!r}"
+            )
+        candidate = configured if str(raw_suffix) in {"", "."} else configured / suffix
+        exists = candidate.is_dir()
+        entries: list[str] = []
+        if exists:
+            limit = max(0, int(debug_cfg.get("root_entry_limit", 20)))
+            try:
+                entries = sorted(path.name for path in candidate.iterdir())[:limit]
+            except OSError as exc:
+                entries = [f"<list failed: {exc}>"]
+        _emit_debug(
+            debug_cfg,
+            "image_root.candidate",
+            source=source_cfg.get("name"),
+            suffix=raw_suffix,
+            path=candidate,
+            exists=exists,
+            entries=entries,
+        )
+        if exists:
+            resolved = candidate.resolve()
+            _emit_debug(
+                debug_cfg,
+                "image_root.after",
+                source=source_cfg.get("name"),
+                selected=resolved,
+            )
+            return resolved
+    _emit_debug(
+        debug_cfg,
+        "image_root.after",
+        source=source_cfg.get("name"),
+        selected=configured,
+        warning="no candidate directory exists",
+    )
+    return configured
+
+
 def _resolve_image(
     images_root: Path,
     image_data: dict[str, Any],
     fields: Iterable[str],
-) -> tuple[Path | None, str]:
-    names: list[str] = []
+    *,
+    strip_path_prefixes: Iterable[str] = (),
+    basename_index: dict[str, Path | None] | None = None,
+) -> tuple[Path | None, str, str]:
+    """Resolve a COCO image without deriving labels from its folder name."""
+    names: list[tuple[str, str]] = []
     for field_name in fields:
         value = image_data.get(field_name)
         if value:
-            names.append(str(value).replace("\\", "/"))
-    for name in names:
-        relative = Path(name)
-        if relative.is_absolute() or ".." in relative.parts:
+            names.append((str(field_name), str(value).replace("\\", "/").strip("/")))
+
+    # Try the JSON path exactly, then remove known dataset-root prefixes such
+    # as realwaste-main/RealWaste when images_root already points at RealWaste.
+    for field_name, name in names:
+        for relative_name, method in _relative_image_candidates(name, strip_path_prefixes):
+            relative = Path(relative_name)
+            if relative.is_absolute() or ".." in relative.parts:
+                continue
+            candidate = images_root / relative
+            if candidate.is_file():
+                return candidate.resolve(), name, f"{method}:{field_name}"
+
+    # A basename fallback is safe only for names that occur exactly once in the
+    # raw tree. Duplicate names across original classes remain unresolved.
+    for field_name, name in names:
+        indexed = (basename_index or {}).get(Path(name).name.casefold())
+        if indexed is not None:
+            return indexed.resolve(), name, f"unique_basename:{field_name}"
+
+    source_name = names[0][1] if names else str(image_data.get("id", "unknown"))
+    return None, source_name, "unresolved"
+
+
+def _trace_image_resolution(
+    images_root: Path,
+    image_data: dict[str, Any],
+    fields: Iterable[str],
+    strip_path_prefixes: Iterable[str],
+    basename_index: dict[str, Path | None],
+) -> dict[str, Any]:
+    """Describe every attempted image path for a bounded debug sample."""
+    references: dict[str, Any] = {}
+    candidates: list[dict[str, Any]] = []
+    basename_lookups: list[dict[str, Any]] = []
+    for raw_field in fields:
+        field_name = str(raw_field)
+        value = image_data.get(field_name)
+        if not value:
             continue
-        candidate = images_root / relative
-        if candidate.is_file():
-            return candidate.resolve(), name
-    return None, names[0] if names else str(image_data.get("id", "unknown"))
+        name = str(value).replace("\\", "/").strip("/")
+        references[field_name] = name
+        for relative_name, method in _relative_image_candidates(name, strip_path_prefixes):
+            relative = Path(relative_name)
+            safe = not relative.is_absolute() and ".." not in relative.parts
+            candidate = images_root / relative if safe else None
+            candidates.append(
+                {
+                    "field": field_name,
+                    "method": method,
+                    "relative": relative_name,
+                    "path": candidate,
+                    "safe": safe,
+                    "is_file": bool(candidate and candidate.is_file()),
+                }
+            )
+        basename = Path(name).name.casefold()
+        indexed = basename_index.get(basename)
+        basename_lookups.append(
+            {
+                "field": field_name,
+                "basename": basename,
+                "indexed_path": indexed,
+                "status": (
+                    "unique"
+                    if indexed is not None
+                    else "ambiguous_or_missing"
+                ),
+            }
+        )
+    return {
+        "images_root": images_root,
+        "references": references,
+        "path_candidates": candidates,
+        "basename_lookups": basename_lookups,
+    }
+
+
+def _relative_image_candidates(
+    name: str,
+    strip_path_prefixes: Iterable[str],
+) -> list[tuple[str, str]]:
+    """Return exact and configured prefix-stripped relative path candidates."""
+    result = [(name, "exact")]
+    folded_name = name.casefold()
+    for raw_prefix in strip_path_prefixes:
+        prefix = str(raw_prefix).replace("\\", "/").strip("/")
+        marker = f"{prefix}/"
+        if folded_name.startswith(marker.casefold()):
+            stripped = name[len(marker) :]
+            if stripped and stripped not in {item[0] for item in result}:
+                result.append((stripped, "prefix_stripped"))
+    return result
+
+
+def _build_unique_basename_index(images_root: Path) -> dict[str, Path | None]:
+    """Index unique image basenames and mark duplicates as ambiguous."""
+    supported = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+    result: dict[str, Path | None] = {}
+    for path in images_root.rglob("*"):
+        if not path.is_file() or path.suffix.casefold() not in supported:
+            continue
+        key = path.name.casefold()
+        result[key] = None if key in result else path
+    return result
 
 
 def _valid_bbox(value: Any, width: int, height: int) -> list[float] | None:
@@ -439,14 +799,25 @@ def _materialize(
                 }
                 for name, version in sorted(input_versions.items())
             },
-            "sources": source_reports,
+            "sources": {
+                name: {
+                    key: value
+                    for key, value in report.items()
+                    if key not in {"images_root_configured", "images_root_resolved"}
+                }
+                for name, report in sorted(source_reports.items())
+            },
             "splits": split_reports,
         }
         fingerprint_payload = json.dumps(
             fingerprint_basis, sort_keys=True, separators=(",", ":")
         ).encode()
         manifest["dataset_fingerprint"] = hashlib.sha256(fingerprint_payload).hexdigest()
-        _apply_quality_gates(manifest, config.payload["data"].get("quality", {}))
+        _apply_quality_gates(
+            manifest,
+            config.payload["data"].get("quality", {}),
+            debug_cfg=config.payload["data"].get("debug", {}),
+        )
         (temp_dir / "dataset_manifest.json").write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
@@ -542,13 +913,27 @@ def _aggregate_image_digest(records: list[ImageRecord]) -> str:
     return digest.hexdigest()
 
 
-def _apply_quality_gates(manifest: dict[str, Any], quality_cfg: dict[str, Any]) -> None:
+def _apply_quality_gates(
+    manifest: dict[str, Any],
+    quality_cfg: dict[str, Any],
+    *,
+    debug_cfg: dict[str, Any] | None = None,
+) -> None:
+    debug_cfg = debug_cfg or {}
+    _emit_debug(
+        debug_cfg,
+        "quality.before",
+        quality_config=quality_cfg,
+        total_images=manifest.get("total_images"),
+        total_instances=manifest.get("total_instances"),
+    )
     if quality_cfg.get("require_all_classes", True):
         total_counts = Counter()
         for split in manifest["splits"].values():
             total_counts.update(split["instances_by_class"])
         missing = [label for label in manifest["classes"] if total_counts[label] == 0]
         if missing:
+            _emit_debug(debug_cfg, "quality.failed", gate="all_classes", missing=missing)
             raise DatasetBuildError(
                 f"Dataset quality gate failed; classes without instances: {missing}"
             )
@@ -556,8 +941,37 @@ def _apply_quality_gates(manifest: dict[str, Any], quality_cfg: dict[str, Any]) 
     for name, report in manifest["sources"].items():
         declared = int(report.get("images_declared", 0))
         fraction = (int(report.get("missing_images", 0)) / declared) if declared else 0.0
+        _emit_debug(
+            debug_cfg,
+            "quality.source",
+            source=name,
+            declared=declared,
+            resolved=report.get("images"),
+            missing=report.get("missing_images"),
+            missing_fraction=fraction,
+            allowed_fraction=max_missing,
+            configured_root=report.get("images_root_configured"),
+            resolved_root=report.get("images_root_resolved"),
+            resolution_methods=report.get("image_resolution"),
+            missing_examples=report.get("missing_image_examples"),
+        )
         if fraction > max_missing:
+            examples = report.get("missing_image_examples", [])
+            first_missing = examples[0] if examples else None
+            _emit_debug(
+                debug_cfg,
+                "quality.failed",
+                gate="missing_image_fraction",
+                source=name,
+                fraction=fraction,
+                allowed=max_missing,
+                resolved_root=report.get("images_root_resolved"),
+                first_missing=first_missing,
+            )
             raise DatasetBuildError(
                 f"Dataset quality gate failed; source '{name}' missing image fraction "
-                f"{fraction:.3%} exceeds {max_missing:.3%}"
+                f"{fraction:.3%} exceeds {max_missing:.3%}; "
+                f"resolved_root={report.get('images_root_resolved')}; "
+                f"first_missing={first_missing}"
             )
+    _emit_debug(debug_cfg, "quality.after", status="passed")

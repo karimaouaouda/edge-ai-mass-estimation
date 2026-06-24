@@ -25,6 +25,13 @@ data:
   materialize: hardlink
   keep_empty_images: true
   multipart_policy: largest
+  # Structured diagnostics are printed to Kaggle output. Per-image traces are
+  # capped, while progress and final counters still cover the complete source.
+  debug:
+    enabled: ${DATA_DEBUG_ENABLED:true}
+    sample_limit: ${DATA_DEBUG_SAMPLE_LIMIT:25}
+    progress_every: ${DATA_DEBUG_PROGRESS_EVERY:250}
+    root_entry_limit: ${DATA_DEBUG_ROOT_ENTRY_LIMIT:20}
   split:
     train: 0.70
     val: 0.15
@@ -64,30 +71,34 @@ data:
 
     - name: realwaste
       required: true
-      # Produced by notebooks/prepare_realwaste_sam_kaggle.ipynb. Its COCO
-      # images retain source_class_name, which restores the material label.
-      annotations: ${REALWASTE_ANNOTATIONS:data/normalized/realwaste/annotations.json}
-      images: ${REALWASTE_IMAGES:data/raw/RealWaste}
+      # The raw dataset keeps its original, non-project class folders under
+      # realwaste-main/RealWaste/. Those folder names are intentionally ignored:
+      # annotation category_id -> COCO categories[].name is the label authority.
+      annotations: ${REALWASTE_ANNOTATIONS:data/annotations/realwaste/annotations.json}
+      images: ${REALWASTE_IMAGES:data/raw/realwaste-main/RealWaste}
+      # REALWASTE_IMAGES may point either to the Kaggle dataset mount, its
+      # realwaste-main directory, or the final RealWaste directory. The first
+      # existing candidate below becomes the effective image root.
+      images_root_candidates: [realwaste-main/RealWaste, RealWaste, .]
+      # Segmentation generators often retain the original relative path in
+      # source_file_name while file_name points to a flattened output copy.
       file_name_fields: [source_file_name, file_name]
-      category_from_image_field: source_class_name
+      # Accept JSON paths rooted above the configured RealWaste image directory.
+      strip_path_prefixes: [realwaste-main/RealWaste, RealWaste]
+      # Last-resort lookup is allowed only when a basename is unique across all
+      # original class folders; ambiguous filenames are reported as missing.
+      recursive_basename_fallback: true
       resolver: direct
-      category_mapping:
-        Cardboard: paper_cardboard
-        Food Organics: organic_waste
-        Glass: glass
-        Metal: metal_can
-        Miscellaneous Trash: mixed_waste
-        Paper: paper_cardboard
-        Plastic: rigid_plastic
-        Textile Trash: mixed_waste
-        Vegetation: organic_waste
+      # Fail fast if a legacy JSON still uses original folders or one generic
+      # `trash` category instead of the canonical project labels.
+      require_category_names_in_data_classes: true
       unknown_category: error
       allow_bbox_fallback: false
 
 model:
   task: segment
   # Any Ultralytics model name or local .pt checkpoint is accepted.
-  checkpoint: ${YOLO_CHECKPOINT:yolo26n-seg.pt}
+  checkpoint: ${YOLO_CHECKPOINT:yolo26m-seg.pt}
 
 training:
   run_name: waste-seg-yolo

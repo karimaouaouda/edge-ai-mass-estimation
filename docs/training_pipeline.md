@@ -67,7 +67,9 @@ Each configured source must provide:
 - polygon segmentations for a segmentation task, or `allow_bbox_fallback: true` when rectangular masks are intentionally acceptable;
 - a resolver or explicit `category_mapping` into `data.classes`.
 
-The default config merges TACO, AquaTrash, and RealWaste into the repository's eight-class taxonomy. RealWaste uses `source_class_name` from the YOLO-to-SAM preparation notebook, retaining the original folder class even though its generated COCO category is one-class `trash`.
+The default config merges TACO, AquaTrash, and RealWaste into the repository's eight-class taxonomy. RealWaste is supplied as two independent inputs: the untouched `realwaste-main/RealWaste/<original-class>/...` image tree and a COCO segmentation JSON whose category names are already project labels. Original RealWaste folder classes are never used as training labels. `source_file_name` is preferred for locating nested raw images, while `category_id -> categories[].name` remains the label authority. `REALWASTE_IMAGES` may point at the Kaggle dataset mount, `realwaste-main`, or the final `RealWaste` directory; preprocessing records both configured and resolved roots in the source report.
+
+Dataset diagnostics are enabled by default and printed as one-line JSON records prefixed with `[dataset-debug]`. They cover build/source boundaries, path-root candidates, COCO counts/categories, bounded image-resolution traces, periodic progress, and every quality-gate input. Control verbosity with `DATA_DEBUG_ENABLED`, `DATA_DEBUG_SAMPLE_LIMIT`, `DATA_DEBUG_PROGRESS_EVERY`, and `DATA_DEBUG_ROOT_ENTRY_LIMIT`.
 
 Preprocessing provides:
 
@@ -88,8 +90,8 @@ COCO RLE masks are rejected rather than silently converted incorrectly. Convert 
 
 ```bash
 dvc add data/raw/aquatrash
-dvc add data/raw/RealWaste
-dvc add data/normalized/realwaste
+dvc add data/raw/realwaste-main/RealWaste
+dvc add data/annotations/realwaste/annotations.json
 git add data/raw/*.dvc data/normalized/*.dvc .gitignore
 ```
 
@@ -170,10 +172,12 @@ The edge release process should consume the approved `production` version, expor
 
 Open `notebooks/yolo_training_pipeline.ipynb`. It discovers a repository uploaded as a Kaggle dataset, adds its `src` folder to Python, binds mounted dataset paths through environment variables, and calls the same package API as the CLI.
 
+See `docs/kaggle_training_guide.md` for complete source-dataset and wheel upload instructions, kernel metadata, dataset bindings, offline dependencies, output persistence, and Optuna resume steps.
+
 Recommended Kaggle layout:
 
 1. Upload this repository or its built wheel as a private module dataset.
-2. Attach TACO, AquaTrash images, AquaTrash COCO labels, raw RealWaste, RealWaste COCO/SAM labels, and the starting checkpoint as datasets.
+2. Attach AquaTrash images/COCO labels, raw RealWaste, and the separate RealWaste segmentation JSON; TACO is downloaded from its Hugging Face COCO JSON into `/kaggle/working`.
 3. Set the path variables shown in the notebook.
 4. Run `preprocess`, inspect the mosaics and manifest, then set `TRAIN_STAGES=tune,train,evaluate,export,register`.
 5. Persist `/kaggle/working/artifacts` as a notebook output, or point MLflow to a remote server.
