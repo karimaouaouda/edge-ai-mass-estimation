@@ -97,11 +97,39 @@ class TrainingConfig:
         if model.get("task", "segment") not in {"segment", "detect"}:
             raise TrainingConfigError("model.task must be 'segment' or 'detect'")
 
+        training = self.payload["training"]
+        checkpointing = training.get("checkpointing", {})
+        if not isinstance(checkpointing, dict):
+            raise TrainingConfigError("training.checkpointing must be a mapping")
+        resume = checkpointing.get("resume", {})
+        if not isinstance(resume, dict):
+            raise TrainingConfigError("training.checkpointing.resume must be a mapping")
+        if checkpointing.get("enabled", True):
+            interval = int(checkpointing.get("interval_epochs", 10))
+            if interval <= 0:
+                raise TrainingConfigError(
+                    "training.checkpointing.interval_epochs must be greater than zero"
+                )
+            keep_last = int(checkpointing.get("keep_last", 10))
+            if keep_last < 0:
+                raise TrainingConfigError(
+                    "training.checkpointing.keep_last must be zero or greater"
+                )
+        resume_mode = str(resume.get("mode", "auto")).lower()
+        if resume_mode not in {"auto", "never", "required"}:
+            raise TrainingConfigError(
+                "training.checkpointing.resume.mode must be auto, never, or required"
+            )
+        additional_epochs = int(resume.get("additional_epochs", 0))
+        if additional_epochs < 0:
+            raise TrainingConfigError(
+                "training.checkpointing.resume.additional_epochs must be zero or greater"
+            )
+
         tuning = self.payload.get("tuning", {})
         if tuning.get("enabled", True) and not isinstance(tuning.get("search_space", {}), dict):
             raise TrainingConfigError("tuning.search_space must be a mapping")
         if tuning.get("enabled", True) and tuning.get("enforce_complete_space", True):
-            training = self.payload["training"]
             optimizable = {
                 "batch",
                 "imgsz",

@@ -103,6 +103,26 @@ model:
 training:
   run_name: waste-seg-yolo
   artifacts_dir: ${TRAINING_ARTIFACTS:artifacts/training/yolo}
+  checkpointing:
+    # Save a resumable snapshot every N completed epochs. Each snapshot contains
+    # weights, best weights when available, all metric history, curve images,
+    # checksums, and a manifest under artifacts/.../checkpoints/epoch_NNNNNN/.
+    enabled: true
+    interval_epochs: 5
+    save_final: true
+    # Keep only the newest N checkpoint directories. Use 0 for unlimited.
+    keep_last: 10
+    resume:
+      # auto: resume checkpoints/latest.json when present, otherwise use the
+      # model.checkpoint below. never: always start from model.checkpoint.
+      # required: fail unless an automatic or explicit checkpoint exists.
+      mode: auto
+      # An explicit local/mounted checkpoint overrides automatic discovery.
+      checkpoint: ${TRAINING_RESUME_CHECKPOINT:}
+      # Set to N to train N additional epochs on every resumed invocation while
+      # preserving optimizer/scheduler state. Zero continues to training.epochs
+      # as a total target. Example chunking: epochs=20, additional_epochs=20.
+      additional_epochs: 0
   epochs: 100
   batch: 16
   imgsz: 640

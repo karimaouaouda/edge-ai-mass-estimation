@@ -92,6 +92,11 @@ bash scripts/publish_kaggle_dataset.sh \
   --message "Publish updated training module"
 ```
 
+Final YOLO training saves periodic resumable snapshots and automatically loads
+the newest one on the next invocation. Configure the interval and resumed chunk
+size with `training.checkpointing.interval_epochs` and
+`training.checkpointing.resume.additional_epochs`.
+
 ## Jetson Deployment
 
 ```bash

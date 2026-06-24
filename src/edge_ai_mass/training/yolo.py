@@ -14,6 +14,11 @@ from typing import Any
 
 from PIL import Image
 
+from edge_ai_mass.training.checkpoints import (
+    CheckpointStore,
+    resolve_model_source,
+    resume_target_epochs,
+)
 from edge_ai_mass.training.config import TrainingConfig
 from edge_ai_mass.training.state import PipelineState
 from edge_ai_mass.training.tracking import MLflowSession, flatten_scalars
@@ -67,7 +72,11 @@ class YOLOTrainer:
         )
         metric_name = str(tuning.get("metric", "mask_map50_95"))
         search_space = tuning.get("search_space", {})
-        checkpoint = _checkpoint(self.config)
+        checkpoint = resolve_model_source(
+            self.config,
+            artifacts_dir=self.artifacts_dir,
+            prefer_resume=False,
+        ).path
 
         with tracker.run():
             tracker.log_dataset(self._dataset_manifest())
@@ -161,14 +170,55 @@ class YOLOTrainer:
         YOLO = _require_yolo()
         tracker = MLflowSession(self.config, self.state)
         best_params = dict(self.state.data.get("best_params", {}))
-        model = YOLO(_checkpoint(self.config), task=self.config.payload["model"]["task"])
+        model_source = resolve_model_source(
+            self.config,
+            artifacts_dir=self.artifacts_dir,
+            prefer_resume=True,
+        )
+        model = YOLO(model_source.path, task=self.config.payload["model"]["task"])
+        dataset_manifest = self._dataset_manifest()
+        checkpoint_store = CheckpointStore(
+            self.config,
+            self.state,
+            dataset_fingerprint=dataset_manifest["dataset_fingerprint"],
+            model_source=model_source,
+        )
+        if checkpoint_store.enabled:
+            model.add_callback("on_model_save", checkpoint_store.callback)
+        target_epochs = resume_target_epochs(self.config, model_source)
+        if model_source.resume:
+            # Ultralytics restores train_args from the checkpoint and normally
+            # ignores a new epochs value. Updating it at this lifecycle point
+            # preserves optimizer state while allowing controlled chunking.
+            def configure_resume_target(trainer: Any) -> None:
+                trainer.epochs = target_epochs
+                trainer.args.epochs = target_epochs
+
+            model.add_callback("on_pretrain_routine_start", configure_resume_target)
         with tracker.run() as run:
-            tracker.log_dataset(self._dataset_manifest())
+            tracker.log_dataset(dataset_manifest)
             self._log_dataset_visualizations(tracker)
-            tracker.mlflow.log_params(flatten_scalars(self._train_args(best_params, tuning=False)))
-            result = model.train(
-                **self._train_args(best_params, tuning=False, run_name=self.config.run_name)
+            train_args = self._train_args(
+                best_params,
+                tuning=False,
+                run_name=self.config.run_name,
             )
+            if model_source.resume:
+                train_args["resume"] = True
+            tracker.mlflow.log_params(flatten_scalars(train_args))
+            tracker.mlflow.log_dict(
+                {
+                    "kind": model_source.kind,
+                    "path": model_source.path,
+                    "resume": model_source.resume,
+                    "completed_epochs": model_source.completed_epochs,
+                    "manifest": model_source.manifest,
+                    "checkpoint_interval_epochs": checkpoint_store.interval,
+                    "target_epochs": target_epochs,
+                },
+                "training/model_source.json",
+            )
+            result = model.train(**train_args)
             run_dir = Path(
                 getattr(result, "save_dir", getattr(model.trainer, "save_dir", ""))
             ).resolve()
@@ -196,13 +246,30 @@ class YOLOTrainer:
                 tracker.mlflow.log_artifacts(
                     str(training_artifacts_dir), artifact_path="training"
                 )
+            checkpoints_dir = self.artifacts_dir / "checkpoints"
+            if checkpoints_dir.is_dir():
+                tracker.mlflow.log_artifacts(
+                    str(checkpoints_dir), artifact_path="checkpoints"
+                )
+            latest_checkpoint = _read_optional_json(checkpoints_dir / "latest.json")
             summary = {
                 "mlflow_run_id": run.info.run_id,
                 "checkpoint": str(self.config.payload["model"]["checkpoint"]),
-                "dataset_fingerprint": self._dataset_manifest()["dataset_fingerprint"],
+                "model_source": {
+                    "path": model_source.path,
+                    "kind": model_source.kind,
+                    "resume": model_source.resume,
+                    "completed_epochs": model_source.completed_epochs,
+                    "manifest": model_source.manifest,
+                },
+                "resumed": model_source.resume,
+                "target_epochs": target_epochs,
+                "dataset_fingerprint": dataset_manifest["dataset_fingerprint"],
                 "best_params": best_params,
                 "best_weights": str(best_path),
                 "last_weights": str(last_path) if last_path.is_file() else None,
+                "latest_checkpoint": latest_checkpoint,
+                "checkpoints_dir": str(checkpoints_dir),
                 "ultralytics_run_dir": str(run_dir),
                 "metrics": training_metrics,
                 "artifacts": training_artifacts,
@@ -498,6 +565,12 @@ class YOLOTrainer:
             "plots": not tuning,
             "verbose": bool(training.get("verbose", True)),
         }
+        checkpointing = training.get("checkpointing", {})
+        if not tuning:
+            args["save"] = True
+            # The pipeline stores richer snapshots in artifacts/checkpoints via
+            # on_model_save. Disable duplicate Ultralytics epoch*.pt files.
+            args["save_period"] = -1
         args.update(training.get("hyperparameters", {}))
         args.update(training.get("augmentation", {}))
         args.update(training.get("extra_args", {}))
@@ -784,10 +857,10 @@ def _suggest(trial: Any, name: str, specification: dict[str, Any]) -> Any:
     raise ValueError(f"Unsupported Optuna parameter type '{kind}' for '{name}'")
 
 
-def _checkpoint(config: TrainingConfig) -> str:
-    value = str(config.payload["model"]["checkpoint"])
-    candidate = config.path(value)
-    return str(candidate) if candidate.exists() else value
+def _read_optional_json(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _optuna_storage(config: TrainingConfig, value: str) -> str:

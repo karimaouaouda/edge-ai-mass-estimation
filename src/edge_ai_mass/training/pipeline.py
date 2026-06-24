@@ -6,6 +6,7 @@ import importlib.util
 from pathlib import Path
 from typing import Any
 
+from edge_ai_mass.training.checkpoints import resolve_model_source, resume_target_epochs
 from edge_ai_mass.training.config import TrainingConfig, normalize_stages
 from edge_ai_mass.training.preprocessing import build_yolo_dataset, inspect_sources
 from edge_ai_mass.training.state import PipelineState
@@ -66,6 +67,23 @@ class TrainingPipeline:
             for name in sorted(required_packages)
             if not packages[name]
         )
+        try:
+            model_source = resolve_model_source(
+                self.config,
+                artifacts_dir=self.config.artifacts_dir,
+                prefer_resume="train" in stages,
+            )
+            model_source_payload = {
+                "path": model_source.path,
+                "kind": model_source.kind,
+                "resume": model_source.resume,
+                "completed_epochs": model_source.completed_epochs,
+                "target_epochs": resume_target_epochs(self.config, model_source),
+                "manifest": model_source.manifest,
+            }
+        except (FileNotFoundError, RuntimeError) as exc:
+            blocking_issues.append(str(exc))
+            model_source_payload = None
         return {
             "config": str(self.config.source_path),
             "config_digest": self.config.digest,
@@ -73,6 +91,7 @@ class TrainingPipeline:
             "model_stage": self.config.payload["project"].get("model_stage", "detection"),
             "execution_stages": stages,
             "checkpoint": str(self.config.payload["model"]["checkpoint"]),
+            "model_source": model_source_payload,
             "dataset_dir": str(self.config.dataset_dir),
             "artifacts_dir": str(self.config.artifacts_dir),
             "sources": sources,

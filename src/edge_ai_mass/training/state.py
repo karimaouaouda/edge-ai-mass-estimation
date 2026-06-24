@@ -34,6 +34,11 @@ class PipelineState:
         )
         temporary.replace(self.path)
 
+    def patch(self, **values: Any) -> None:
+        """Persist values without marking a pipeline stage as completed."""
+        self.data.update(values)
+        self.save()
+
     def reset(self, **values: Any) -> None:
         self.data = {"schema_version": 1, "completed_stages": [], **values}
         self.save()

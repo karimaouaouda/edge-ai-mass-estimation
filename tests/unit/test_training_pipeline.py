@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
 
+from edge_ai_mass.training.checkpoints import (
+    CheckpointStore,
+    ModelSource,
+    resolve_model_source,
+    resume_target_epochs,
+)
 from edge_ai_mass.training.config import TrainingConfig, TrainingConfigError, normalize_stages
 from edge_ai_mass.training.pipeline import TrainingPipeline
 from edge_ai_mass.training.preprocessing import DatasetBuildError, build_yolo_dataset
@@ -303,6 +310,127 @@ def test_training_curves_and_annotated_batches_are_organized(tmp_path: Path):
     assert len(artifacts["curves"]) == 3
     assert len(artifacts["annotated_batches"]) == 1
     assert all(Path(path).is_file() for path in artifacts["curves"])
+
+
+def test_periodic_checkpoint_stores_weights_metrics_curves_and_latest(tmp_path: Path):
+    config = _config(tmp_path)
+    config.payload["training"]["checkpointing"] = {
+        "enabled": True,
+        "interval_epochs": 5,
+        "save_final": True,
+        "keep_last": 2,
+        "resume": {"mode": "auto", "checkpoint": None},
+    }
+    state = PipelineState(config.artifacts_dir / "state.json")
+    run_dir = tmp_path / "ultralytics-run"
+    weights_dir = run_dir / "weights"
+    weights_dir.mkdir(parents=True)
+    last = weights_dir / "last.pt"
+    best = weights_dir / "best.pt"
+    last.write_bytes(b"resumable-optimizer-state")
+    best.write_bytes(b"best-model-state")
+    results_csv = run_dir / "results.csv"
+    results_csv.write_text(
+        "epoch,train/box_loss,metrics/mAP50-95(M)\n"
+        "0,1.5,0.10\n"
+        "4,0.8,0.42\n",
+        encoding="utf-8",
+    )
+
+    trainer = SimpleNamespace(
+        epoch=4,
+        epochs=20,
+        stop=False,
+        last=last,
+        best=best,
+        csv=results_csv,
+        save_dir=run_dir,
+        metrics={"metrics/mAP50-95(M)": 0.42},
+        fitness=0.42,
+        best_fitness=0.42,
+        lr={"lr/pg0": 0.001},
+        tloss=[0.8],
+        label_loss_items=lambda values: {"train/box_loss": values[0]},
+    )
+    store = CheckpointStore(
+        config,
+        state,
+        dataset_fingerprint="dataset-v1",
+        model_source=ModelSource("yolo26n-seg.pt", "base_model", False),
+    )
+
+    store.callback(trainer)
+
+    checkpoint_dir = config.artifacts_dir / "checkpoints" / "epoch_000005"
+    assert (checkpoint_dir / "weights.pt").read_bytes() == b"resumable-optimizer-state"
+    assert (checkpoint_dir / "best.pt").read_bytes() == b"best-model-state"
+    assert (checkpoint_dir / "results.csv").is_file()
+    assert (checkpoint_dir / "metrics_history.json").is_file()
+    assert (checkpoint_dir / "metrics_curves.png").is_file()
+    latest = json.loads(
+        (config.artifacts_dir / "checkpoints" / "latest.json").read_text(encoding="utf-8")
+    )
+    assert latest["completed_epochs"] == 5
+    assert latest["weights"] == "epoch_000005/weights.pt"
+    assert Path(state.data["latest_checkpoint"]) == (checkpoint_dir / "weights.pt").resolve()
+
+    resolved = resolve_model_source(config, artifacts_dir=config.artifacts_dir)
+    assert resolved.resume is True
+    assert resolved.kind == "automatic_checkpoint"
+    assert resolved.completed_epochs == 5
+    assert Path(resolved.path) == (checkpoint_dir / "weights.pt").resolve()
+
+
+def test_train_args_enable_checkpoint_callback_without_duplicate_epoch_weights(
+    tmp_path: Path,
+):
+    config = _config(tmp_path)
+    config.payload["training"]["checkpointing"] = {
+        "enabled": True,
+        "interval_epochs": 5,
+        "resume": {"mode": "never"},
+    }
+    trainer = YOLOTrainer(config, PipelineState(config.artifacts_dir / "state.json"))
+
+    args = trainer._train_args({}, tuning=False, run_name=config.run_name)
+
+    assert args["save"] is True
+    assert args["save_period"] == -1
+    assert resolve_model_source(config).kind == "base_model"
+
+
+def test_resume_target_supports_fixed_size_training_chunks(tmp_path: Path):
+    config = _config(tmp_path)
+    config.payload["training"]["epochs"] = 20
+    config.payload["training"]["checkpointing"] = {
+        "enabled": True,
+        "interval_epochs": 5,
+        "resume": {"mode": "auto", "additional_epochs": 20},
+    }
+    source = ModelSource(
+        path=str(tmp_path / "checkpoint.pt"),
+        kind="automatic_checkpoint",
+        resume=True,
+        completed_epochs=40,
+    )
+
+    assert resume_target_epochs(config, source) == 60
+    assert resume_target_epochs(
+        config,
+        ModelSource("yolo26n-seg.pt", "base_model", False),
+    ) == 20
+
+
+def test_checkpoint_interval_must_be_positive(tmp_path: Path):
+    payload = _config(tmp_path).payload
+    payload["training"]["checkpointing"] = {
+        "enabled": True,
+        "interval_epochs": 0,
+        "resume": {"mode": "auto"},
+    }
+
+    with pytest.raises(TrainingConfigError, match="interval_epochs"):
+        TrainingConfig(payload, tmp_path / "config.yaml")
 
 
 def test_tuning_guardrail_rejects_configured_params_without_distributions(tmp_path: Path):

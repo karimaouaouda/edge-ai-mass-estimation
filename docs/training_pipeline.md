@@ -58,6 +58,63 @@ edge-ai-mass train --stage detection \
 
 `--skip-optuna` removes the tune stage from a full run. Preprocessing always rebuilds atomically when that stage is invoked; DVC decides when reproduction is needed. `--force` permits a changed config to replace model state under the same run name and allows registration to run again. Using a new `training.run_name` is preferred when the experiment is conceptually different.
 
+### Periodic checkpoints and chunked training
+
+The existing `train` stage stores a resumable checkpoint every
+`training.checkpointing.interval_epochs`; no extra pipeline stage is required.
+
+```yaml
+training:
+  epochs: 20
+  checkpointing:
+    enabled: true
+    interval_epochs: 5
+    save_final: true
+    keep_last: 10
+    resume:
+      mode: auto
+      checkpoint: null
+      additional_epochs: 20
+```
+
+With this example, the first invocation trains 20 epochs. Every later
+invocation loads `checkpoints/latest.json`, restores model, optimizer, scaler,
+scheduler, and epoch state, then trains 20 additional epochs. Set
+`additional_epochs: 0` when `training.epochs` is a fixed total target.
+
+Resume modes:
+
+- `auto`: use the latest managed checkpoint when present, otherwise load
+  `model.checkpoint`.
+- `never`: always start from `model.checkpoint`.
+- `required`: fail unless a managed or explicit resume checkpoint exists.
+
+Select a mounted or local checkpoint explicitly:
+
+```bash
+edge-ai-mass train \
+  --stage train \
+  --config configs/training/yolo_segmentation.yaml \
+  --set training.checkpointing.resume.mode=required \
+  --set training.checkpointing.resume.checkpoint=/path/to/weights.pt \
+  --set training.checkpointing.resume.additional_epochs=20
+```
+
+The same professional resolver is available to scripts and notebooks:
+
+```python
+from edge_ai_mass.training import load_model_or_checkpoint
+
+model, source = load_model_or_checkpoint(pipeline.config)
+print(source.kind, source.path, source.resume)
+
+# Ignore stored checkpoints and load model.checkpoint.
+base_model, base_source = load_model_or_checkpoint(
+    pipeline.config,
+    prefer_resume=False,
+)
+```
+
 ## Data contract
 
 Each configured source must provide:
@@ -122,7 +179,7 @@ Each trial is a nested MLflow run. Failed CUDA/resource combinations are marked 
 
 ## Curves and qualitative evaluation
 
-The final best-parameter training run enables Ultralytics plots. Its loss/metric history, precision-recall, F1, precision, recall, and confusion-matrix curves are copied into `training/curves/`; dataset-label diagnostics and annotated train/validation batches are retained beside them.
+The final best-parameter training run enables Ultralytics plots. Its loss/metric history, precision-recall, F1, precision, recall, and confusion-matrix curves are copied into `training/curves/`; dataset-label diagnostics and annotated train/validation batches are retained beside them. Every managed checkpoint atomically stores resumable weights, current best weights, full CSV and JSON metric history, a generated all-metric curve panel, checksums, and a manifest.
 
 Evaluation reloads `models/best.pt`, never `last.pt`. For each configured split it saves quantitative metrics, PR/F1/confusion curves, COCO JSON when supported, and deterministic annotated predictions sampled from the actual split. Everything is logged to MLflow and referenced from `reports/evaluation.json`.
 
@@ -199,6 +256,10 @@ artifacts/training/yolo/<run-name>/
   optimization/
     optuna_best.json
     visualizations/*.html
+  checkpoints/
+    latest.json
+    epoch_000005/{weights.pt,best.pt,results.csv,metrics.json,metrics_history.json,metrics_curves.png,checkpoint_manifest.json}
+    epoch_000010/{...}
   models/{best.pt,last.pt}
   training/{curves,diagnostics,annotated_batches}/
   evaluation/<split>/{curves,annotated_samples}/

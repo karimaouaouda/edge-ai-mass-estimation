@@ -300,6 +300,13 @@ Only `models/best.pt` is exported. Outputs are organized under:
 /kaggle/working/artifacts/training/yolo/<run-name>/
 ├── dataset_visualizations/
 ├── optimization/
+├── checkpoints/latest.json
+├── checkpoints/epoch_NNNNNN/
+│   ├── weights.pt
+│   ├── best.pt
+│   ├── results.csv
+│   ├── metrics_history.json
+│   └── metrics_curves.png
 ├── models/best.pt
 ├── training/curves/
 ├── evaluation/<split>/curves/
@@ -401,6 +408,21 @@ python scripts/publish_kaggle_training.py publish --skip-module
 ## 11. Save outputs and resume later
 
 Kaggle preserves `/kaggle/working` when a notebook version completes successfully. Save the notebook version with outputs, or create a new Kaggle dataset from the artifact directory.
+
+Periodic final-training checkpoints are written during training. To run fixed
+chunks, set `training.epochs` to the first chunk and
+`training.checkpointing.resume.additional_epochs` to each resumed chunk size.
+Keep the complete run artifact directory between sessions; the next invocation
+with `resume.mode=auto` loads `checkpoints/latest.json`.
+
+```python
+OVERRIDES += [
+    "training.epochs=20",
+    "training.checkpointing.interval_epochs=5",
+    "training.checkpointing.resume.mode=auto",
+    "training.checkpointing.resume.additional_epochs=20",
+]
+```
 
 For a convenient downloadable archive:
 
