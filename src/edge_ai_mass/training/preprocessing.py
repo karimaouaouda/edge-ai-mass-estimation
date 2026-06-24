@@ -232,6 +232,12 @@ def _read_coco_source(
     image_label_field = source_cfg.get("category_from_image_field")
     unknown_policy = str(source_cfg.get("unknown_category", "error"))
     allow_bbox = bool(source_cfg.get("allow_bbox_fallback", False))
+    drop_images_with_box_polygons = bool(
+        source_cfg.get("drop_images_with_box_polygons", False)
+    )
+    box_polygon_tolerance = max(
+        0.0, float(source_cfg.get("box_polygon_tolerance_pixels", 1.0))
+    )
     task = config.payload["model"].get("task", "segment")
     multipart_policy = str(config.payload["data"].get("multipart_policy", "largest"))
     file_name_fields = source_cfg.get("file_name_fields", ["file_name"])
@@ -272,6 +278,9 @@ def _read_coco_source(
         "invalid_annotations": 0,
         "unmapped_annotations": 0,
         "bbox_fallbacks": 0,
+        "box_polygon_annotations": 0,
+        "box_polygon_image_examples": [],
+        "images_removed_box_polygons": 0,
         "multipart_reduced": 0,
         "dimension_mismatches": 0,
         "image_resolution": Counter(),
@@ -367,6 +376,8 @@ def _read_coco_source(
             width=actual_width,
             height=actual_height,
         )
+        record_class_counts: Counter[str] = Counter()
+        box_polygon_annotation_ids: list[Any] = []
         for annotation_data in annotations_by_image.get(record.source_id, []):
             category = categories.get(int(annotation_data.get("category_id", -1)), {})
             # COCO category names are authoritative by default. An image-level
@@ -399,6 +410,22 @@ def _read_coco_source(
                 polygons = _valid_polygons(
                     annotation_data.get("segmentation"), actual_width, actual_height
                 )
+                if drop_images_with_box_polygons:
+                    box_polygons = [
+                        candidate
+                        for candidate in polygons
+                        if _is_axis_aligned_box_polygon(
+                            candidate,
+                            tolerance=box_polygon_tolerance,
+                        )
+                    ]
+                    if box_polygons:
+                        report["box_polygon_annotations"] += len(box_polygons)
+                        box_polygon_annotation_ids.append(annotation_data.get("id"))
+                        # Do not retain any part of an image containing a
+                        # box-derived pseudo-mask. Mixing its other annotations
+                        # into training would still keep the contaminated image.
+                        continue
                 if polygons:
                     polygon = _select_polygon(polygons, multipart_policy)
                     if len(polygons) > 1:
@@ -416,13 +443,36 @@ def _read_coco_source(
             record.annotations.append(
                 Annotation(class_id=class_to_id[target_label], polygon=polygon, bbox=bbox)
             )
-            report["instances"] += 1
-            report["classes"][target_label] += 1
+            record_class_counts[target_label] += 1
+
+        if box_polygon_annotation_ids:
+            report["images_removed_box_polygons"] += 1
+            examples = report["box_polygon_image_examples"]
+            if len(examples) < 10:
+                examples.append(
+                    {
+                        "image_id": record.source_id,
+                        "source_name": record.source_name,
+                        "annotation_ids": box_polygon_annotation_ids,
+                    }
+                )
+            _emit_debug(
+                debug_cfg,
+                "image.filtered.box_polygon",
+                source=name,
+                image_id=record.source_id,
+                source_name=record.source_name,
+                annotation_ids=box_polygon_annotation_ids,
+                tolerance_pixels=box_polygon_tolerance,
+            )
+            continue
 
         if not record.annotations:
             report["empty_images"] += 1
             if not config.payload["data"].get("keep_empty_images", True):
                 continue
+        report["instances"] += len(record.annotations)
+        report["classes"].update(record_class_counts)
         record.digest = _sha256_file(record.path)
         records.append(record)
         report["images"] += 1
@@ -660,6 +710,49 @@ def _polygon_area(points: list[float]) -> float:
     return 0.5 * sum(
         x1 * y2 - x2 * y1
         for (x1, y1), (x2, y2) in zip(pairs, pairs[1:] + pairs[:1])
+    )
+
+
+def _is_axis_aligned_box_polygon(points: list[float], *, tolerance: float = 1.0) -> bool:
+    """Return true for four-corner polygons generated from an axis-aligned box."""
+    vertices = list(zip(points[0::2], points[1::2]))
+    if len(vertices) > 1 and _points_close(vertices[0], vertices[-1], tolerance):
+        vertices.pop()
+
+    unique_vertices: list[tuple[float, float]] = []
+    for vertex in vertices:
+        if not any(_points_close(vertex, existing, tolerance) for existing in unique_vertices):
+            unique_vertices.append(vertex)
+    if len(unique_vertices) != 4:
+        return False
+
+    min_x = min(x for x, _ in unique_vertices)
+    max_x = max(x for x, _ in unique_vertices)
+    min_y = min(y for _, y in unique_vertices)
+    max_y = max(y for _, y in unique_vertices)
+    if max_x - min_x <= tolerance or max_y - min_y <= tolerance:
+        return False
+
+    expected_corners = {
+        (min_x, min_y),
+        (max_x, min_y),
+        (max_x, max_y),
+        (min_x, max_y),
+    }
+    return all(
+        any(_points_close(vertex, corner, tolerance) for vertex in unique_vertices)
+        for corner in expected_corners
+    )
+
+
+def _points_close(
+    first: tuple[float, float],
+    second: tuple[float, float],
+    tolerance: float,
+) -> bool:
+    return (
+        abs(first[0] - second[0]) <= tolerance
+        and abs(first[1] - second[1]) <= tolerance
     )
 
 

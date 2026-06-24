@@ -197,6 +197,38 @@ def test_realwaste_rejects_legacy_non_project_categories(tmp_path: Path):
         build_yolo_dataset(config)
 
 
+def test_realwaste_removes_box_polygon_annotations_and_their_images(tmp_path: Path):
+    config = _config(tmp_path)
+    source = next(item for item in config.payload["data"]["sources"] if item["name"] == "realwaste")
+    source["drop_images_with_box_polygons"] = True
+    source["box_polygon_tolerance_pixels"] = 0.5
+    annotations_path = Path(source["annotations"])
+    payload = json.loads(annotations_path.read_text(encoding="utf-8"))
+
+    # Keep three genuine, non-rectangular masks. The fourth annotation remains
+    # the box-shaped polygon created by the fixture and must remove its image.
+    genuine_mask = [2, 3, 14, 4, 12, 13, 7, 11, 3, 8]
+    for annotation in payload["annotations"][:3]:
+        annotation["segmentation"] = [genuine_mask]
+    annotations_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    manifest = build_yolo_dataset(config)
+    report = manifest["sources"]["realwaste"]
+
+    assert manifest["total_images"] == 11
+    assert manifest["total_instances"] == 11
+    assert report["images"] == 3
+    assert report["instances"] == 3
+    assert report["box_polygon_annotations"] == 1
+    assert report["images_removed_box_polygons"] == 1
+    assert report["box_polygon_image_examples"][0]["image_id"] == 4
+
+    materialized_realwaste = list(
+        (config.dataset_dir / "images").glob("*/realwaste/*")
+    )
+    assert len(materialized_realwaste) == 3
+
+
 def test_realwaste_failure_prints_bounded_structured_debug(tmp_path: Path, capsys):
     config = _config(tmp_path)
     empty_mount = tmp_path / "empty-realwaste-mount"

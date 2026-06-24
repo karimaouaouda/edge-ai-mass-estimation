@@ -101,6 +101,11 @@ data:
       require_category_names_in_data_classes: true
       unknown_category: error
       allow_bbox_fallback: false
+      # Some RealWaste annotations contain a four-corner bounding box stored as
+      # `segmentation`. Remove the entire contaminated image, even when it also
+      # has another annotation, so training sees genuine masks only.
+      drop_images_with_box_polygons: true
+      box_polygon_tolerance_pixels: 1.0
 
 model:
   task: segment
