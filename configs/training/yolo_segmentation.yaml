@@ -8,6 +8,13 @@ project:
   pipeline: yolo
   model_stage: detection
 
+# ZenML provides ordered steps, run lineage, logs, and retry-ready orchestration
+# while each step delegates to the existing tested implementation.
+orchestration:
+  zenml:
+    enabled: true
+    pipeline_name: edge_ai_mass_yolo_training
+
 data:
   output_dir: ${YOLO_DATASET_OUTPUT:data/processed/waste_seg_yolo}
   classes:
@@ -296,3 +303,17 @@ tracking:
     name: edge-ai-mass-yolo-segmentation
     alias: candidate
     artifact_path: model
+
+# The final ZenML step publishes only reusable training state. Raw data,
+# processed images/labels, annotated samples, and scratch runs are excluded.
+publication:
+  enabled: true
+  provider: kaggle
+  dataset: ${TRAINING_OUTPUT_DATASET:karimaouaouda/edge-ai-mass-training-outputs}
+  title: Edge AI Mass Training Outputs
+  public: false
+  license: MIT
+  bundle_dir: ${TRAINING_OUTPUT_BUNDLE:builds/kaggle/training-outputs/waste-seg-yolo}
+  require_checkpoint: true
+  wait_timeout_seconds: 300
+  version_notes: ${TRAINING_OUTPUT_VERSION_NOTES:Publish reusable YOLO training outputs}

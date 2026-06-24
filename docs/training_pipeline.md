@@ -1,6 +1,27 @@
 # YOLO training and MLOps pipeline
 
-The training system is deliberately separate from the edge inference runtime. The stable entry points are the `edge-ai-mass train` command and `edge_ai_mass.training.TrainingPipeline`; scripts and notebooks call these entry points instead of implementing their own training logic.
+The training system is deliberately separate from the edge inference runtime. The stable entry points are the `edge-ai-mass train` command and `edge_ai_mass.training.TrainingPipeline`; scripts and notebooks call these entry points instead of implementing their own training logic. ZenML supplies the ordered execution DAG and run lineage, while the existing package methods remain the single implementation of every stage.
+
+## ZenML orchestration
+
+ZenML is enabled by default and records this ordered DAG:
+
+```text
+initialize -> preprocess -> tune -> train -> evaluate -> export -> register -> publish
+```
+
+Stages not selected by `--stage` remain visible as explicit skips. Caching is
+disabled because DVC, Optuna, durable state, and managed checkpoints already
+provide domain-specific reuse and resume behavior.
+
+```bash
+edge-ai-mass train \
+  --stage preprocess,train,evaluate,publish \
+  --config configs/training/yolo_segmentation.yaml
+```
+
+Use `--no-zenml` only as a diagnostic fallback to execute the same native stage
+methods without creating a ZenML run.
 
 ## Architecture
 
@@ -44,6 +65,7 @@ Run or resume individual stages:
 edge-ai-mass train --stage preprocess --config configs/training/yolo_segmentation.yaml
 edge-ai-mass train --stage tune --config configs/training/yolo_segmentation.yaml
 edge-ai-mass train --stage train,evaluate,export,register --config configs/training/yolo_segmentation.yaml
+edge-ai-mass train --stage publish --config configs/training/yolo_segmentation.yaml
 ```
 
 Use any Ultralytics checkpoint and apply config overrides without cloning a YAML file:
@@ -210,6 +232,42 @@ MLFLOW_EXPERIMENT_NAME=edge-ai-mass-yolo-segmentation
 
 The pipeline logs the resolved config, Git commit/dirty state, dataset manifest and fingerprint, dataset mosaics, Optuna parameters and plots, final checkpoints, training curves, annotated evaluation samples, exported deployment models, reports, and metrics. Registration packages the best YOLO checkpoint as an MLflow PyFunc model and assigns the configured `candidate` alias.
 
+## Reusable-output dataset publication
+
+The final `publish` step creates
+`karimaouaouda/edge-ai-mass-training-outputs` when absent and creates a new
+Kaggle dataset version on every later successful run.
+
+It includes checkpoints, best/last models, deployment exports, Optuna results,
+metric histories and chart curves, reports, resolved configuration, pipeline
+state, Git metadata, and the dataset manifest. It excludes raw data, processed
+YOLO images/labels, dataset visualizations, annotated samples/batches,
+Ultralytics scratch runs, caches, and the MLflow database.
+
+```yaml
+publication:
+  enabled: true
+  provider: kaggle
+  dataset: karimaouaouda/edge-ai-mass-training-outputs
+  public: false
+  require_checkpoint: true
+```
+
+Restore the output for future training:
+
+```python
+from edge_ai_mass.training import restore_training_outputs
+
+restore_training_outputs(
+    "/kaggle/input/edge-ai-mass-training-outputs/training_outputs.zip",
+    "/kaggle/working/artifacts/training/yolo/waste-seg-yolo",
+)
+```
+
+The helper validates archive paths, excludes metadata from extraction, removes
+stale MLflow IDs, rewrites checkpoint/model paths, and makes
+`resume.mode=auto` immediately usable.
+
 Promotion should remain a separate approval action after edge benchmarking:
 
 ```python
@@ -266,6 +324,7 @@ artifacts/training/yolo/<run-name>/
   exports/<format>/
   exports/exports_manifest.json
   reports/{training_summary,evaluation,registration}.json
+  zenml/{run_context.json,stage_results/}
 ```
 
 `pipeline_state.json` lets stages run in separate CLI jobs or notebook cells. A changed config cannot accidentally reuse trained state under the same run name unless `--force` is explicit.

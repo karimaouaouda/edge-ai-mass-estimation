@@ -390,7 +390,7 @@ The repository `kernel-metadata.json` is already configured to update the existi
 }
 ```
 
-The notebook installs only missing dependencies, extracts the generated module archive, downloads TACO from its Hugging Face JSON, binds the remaining input paths, writes every mutable artifact under `/kaggle/working`, and runs the full pipeline by default. The Kaggle-specific defaults use 10 Optuna trials × 8 epochs followed by a 50-epoch final run; edit the notebook overrides for a larger production search.
+The notebook installs only missing dependencies including ZenML, extracts the generated module archive, downloads TACO from its Hugging Face JSON, binds the remaining input paths, writes every mutable artifact under `/kaggle/working`, and runs the full ordered ZenML pipeline by default. The Kaggle-specific defaults use 10 Optuna trials × 8 epochs followed by a 50-epoch final run; edit the notebook overrides for a larger production search.
 
 To prepare and push both the module and kernel safely, use the helper:
 
@@ -423,6 +423,17 @@ OVERRIDES += [
     "training.checkpointing.resume.additional_epochs=20",
 ]
 ```
+
+The final ZenML `publish` step automatically creates or versions the private
+Kaggle dataset selected by `TRAINING_OUTPUT_DATASET` (default:
+`karimaouaouda/edge-ai-mass-training-outputs`). It uploads
+`training_outputs.zip`, a checksum manifest, and Kaggle metadata. It never
+uploads raw images, processed images/labels, or qualitative sample images.
+
+When this output dataset is attached to a later notebook, the notebook
+discovers `training_outputs.zip`, restores it into the run artifact directory,
+sanitizes stale local paths and MLflow IDs, and enables automatic resume from
+`checkpoints/latest.json`.
 
 For a convenient downloadable archive:
 

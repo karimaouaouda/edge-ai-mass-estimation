@@ -9,6 +9,7 @@ from typing import Any
 from edge_ai_mass.training.checkpoints import resolve_model_source, resume_target_epochs
 from edge_ai_mass.training.config import TrainingConfig, normalize_stages
 from edge_ai_mass.training.preprocessing import build_yolo_dataset, inspect_sources
+from edge_ai_mass.training.publication import TrainingOutputPublisher
 from edge_ai_mass.training.state import PipelineState
 from edge_ai_mass.training.visualization import create_dataset_visualizations
 from edge_ai_mass.training.yolo import YOLOTrainer
@@ -23,6 +24,7 @@ class TrainingPipeline:
 
     def __init__(self, config: TrainingConfig):
         self.config = config
+        self.overrides: list[str] = []
         self.state = PipelineState(config.artifacts_dir / "pipeline_state.json")
 
     @classmethod
@@ -32,7 +34,9 @@ class TrainingPipeline:
         *,
         overrides: list[str] | None = None,
     ) -> "TrainingPipeline":
-        return cls(TrainingConfig.load(path, overrides=overrides))
+        instance = cls(TrainingConfig.load(path, overrides=overrides))
+        instance.overrides = list(overrides or [])
+        return instance
 
     def plan(self, stage: str = "all", *, skip_optuna: bool = False) -> dict[str, Any]:
         stages = normalize_stages(stage, skip_optuna=skip_optuna)
@@ -44,6 +48,8 @@ class TrainingPipeline:
             "dvc": bool(importlib.util.find_spec("dvc")),
             "onnx": bool(importlib.util.find_spec("onnx")),
             "tensorrt": bool(importlib.util.find_spec("tensorrt")),
+            "zenml": bool(importlib.util.find_spec("zenml")),
+            "kaggle": bool(importlib.util.find_spec("kaggle")),
         }
         blocking_issues = []
         if "preprocess" in stages:
@@ -62,6 +68,24 @@ class TrainingPipeline:
                 required_packages.add("onnx")
             if "engine" in export_formats:
                 required_packages.add("tensorrt")
+        if self._zenml_enabled():
+            required_packages.add("zenml")
+        publication = self.config.payload.get("publication", {})
+        if "publish" in stages and publication and publication.get("enabled", True):
+            required_packages.add("kaggle")
+            if publication.get("require_checkpoint", True) and "train" not in stages:
+                has_reusable_model = any(
+                    path.is_file()
+                    for path in (
+                        self.config.artifacts_dir / "checkpoints" / "latest.json",
+                        self.config.artifacts_dir / "models" / "best.pt",
+                        self.config.artifacts_dir / "models" / "last.pt",
+                    )
+                )
+                if not has_reusable_model:
+                    blocking_issues.append(
+                        "publish requires a reusable checkpoint/model; run train first"
+                    )
         blocking_issues.extend(
             f"missing Python package: {name}"
             for name in sorted(required_packages)
@@ -108,6 +132,29 @@ class TrainingPipeline:
         force: bool = False,
     ) -> dict[str, Any]:
         stages = normalize_stages(stage, skip_optuna=skip_optuna)
+        if self._zenml_enabled():
+            from edge_ai_mass.training.zenml_pipeline import run_zenml_pipeline
+
+            settings = self.config.payload.get("orchestration", {}).get("zenml", {})
+            return run_zenml_pipeline(
+                config_path=self.config.source_path,
+                overrides=self.overrides,
+                stages=stages,
+                force=force,
+                pipeline_name=str(
+                    settings.get("pipeline_name", "edge_ai_mass_yolo_training")
+                ),
+            )
+        return self.run_native(",".join(stages), force=force)
+
+    def run_native(
+        self,
+        stage: str,
+        *,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Execute native stages without entering ZenML recursively."""
+        stages = normalize_stages(stage)
         self._prepare_state(force=force)
         trainer = YOLOTrainer(self.config, self.state)
         results: dict[str, Any] = {}
@@ -137,7 +184,19 @@ class TrainingPipeline:
                 results[execution_stage] = trainer.export()
             elif execution_stage == "register":
                 results[execution_stage] = trainer.register(force=force)
+            elif execution_stage == "publish":
+                results[execution_stage] = TrainingOutputPublisher(
+                    self.config,
+                    self.state,
+                ).publish()
         return results
+
+    def _zenml_enabled(self) -> bool:
+        return bool(
+            self.config.payload.get("orchestration", {})
+            .get("zenml", {})
+            .get("enabled", True)
+        )
 
     def _prepare_state(self, *, force: bool) -> None:
         previous = self.state.data.get("config_digest")

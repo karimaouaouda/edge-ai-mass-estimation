@@ -86,7 +86,7 @@ def main(argv: list[str] | None = None) -> None:
         default="all",
         help=(
             "all/detection/yolo, or comma-separated "
-            "preprocess,tune,train,evaluate,export,register"
+            "preprocess,tune,train,evaluate,export,register,publish"
         ),
     )
     p_train.add_argument(
@@ -103,6 +103,11 @@ def main(argv: list[str] | None = None) -> None:
         "--force",
         action="store_true",
         help="Permit changed config under the same run name and repeat registration",
+    )
+    p_train.add_argument(
+        "--no-zenml",
+        action="store_true",
+        help="Run native stages directly (diagnostic fallback; ZenML is the default)",
     )
 
     args = parser.parse_args(argv)
@@ -290,7 +295,10 @@ def _cmd_agent(args: argparse.Namespace) -> None:
 def _cmd_train(args: argparse.Namespace) -> None:
     from edge_ai_mass.training import TrainingPipeline
 
-    pipeline = TrainingPipeline.from_config(args.config, overrides=args.overrides)
+    overrides = list(args.overrides)
+    if args.no_zenml:
+        overrides.append("orchestration.zenml.enabled=false")
+    pipeline = TrainingPipeline.from_config(args.config, overrides=overrides)
     if args.dry_run:
         result = pipeline.plan(args.stage, skip_optuna=args.skip_optuna)
     else:

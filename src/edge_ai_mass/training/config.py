@@ -13,7 +13,15 @@ import yaml
 from edge_ai_mass.utils.config import load_config
 
 
-EXECUTION_STAGES = ("preprocess", "tune", "train", "evaluate", "export", "register")
+EXECUTION_STAGES = (
+    "preprocess",
+    "tune",
+    "train",
+    "evaluate",
+    "export",
+    "register",
+    "publish",
+)
 FULL_PIPELINE_ALIASES = {"all", "detection", "yolo", "yolo-segmentation"}
 
 
@@ -58,6 +66,14 @@ class TrainingConfig:
             raise TrainingConfigError("project.pipeline must be 'yolo' for the implemented trainer")
         if project.get("model_stage", "detection") != "detection":
             raise TrainingConfigError("Only the detection model stage is implemented for now")
+
+        zenml = self.payload.get("orchestration", {}).get("zenml", {})
+        if not isinstance(zenml, dict):
+            raise TrainingConfigError("orchestration.zenml must be a mapping")
+        if zenml.get("enabled", True) and not zenml.get(
+            "pipeline_name", "edge_ai_mass_yolo_training"
+        ):
+            raise TrainingConfigError("orchestration.zenml.pipeline_name cannot be empty")
 
         data = self.payload["data"]
         sources = data.get("sources")
@@ -178,6 +194,20 @@ class TrainingConfig:
                 raise TrainingConfigError(f"Unsupported export format(s): {invalid}")
             if len(set(formats)) != len(formats):
                 raise TrainingConfigError("export.formats must not contain duplicates")
+
+        publication = self.payload.get("publication", {})
+        if not isinstance(publication, dict):
+            raise TrainingConfigError("publication must be a mapping")
+        if publication and publication.get("enabled", True):
+            if publication.get("provider", "kaggle") != "kaggle":
+                raise TrainingConfigError("publication.provider must be 'kaggle'")
+            reference = str(publication.get("dataset", ""))
+            if reference.count("/") != 1 or any(
+                not part.strip() for part in reference.split("/")
+            ):
+                raise TrainingConfigError(
+                    "publication.dataset must use the Kaggle owner/slug format"
+                )
 
     def path(self, value: str | Path) -> Path:
         path = Path(value).expanduser()

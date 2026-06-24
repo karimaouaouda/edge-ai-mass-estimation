@@ -78,6 +78,11 @@ python scripts/train_mass_regression.py --config configs/models/mass_regression_
 
 The YOLO pipeline uses DVC for data lineage, Optuna for persistent hyperparameter studies, and MLflow for experiment tracking and model registration. See `docs/training_pipeline.md`, `docs/kaggle_training_guide.md`, and `notebooks/yolo_training_pipeline.ipynb`.
 
+ZenML orders and records the complete DAG, including a final `publish` step
+that creates or versions a private Kaggle dataset containing reusable
+checkpoints, models, metrics, configuration, and reports—but no raw or
+processed datasets.
+
 Prepare and directly publish the importable module dataset plus GPU training kernel:
 
 ```bash

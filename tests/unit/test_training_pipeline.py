@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +19,11 @@ from edge_ai_mass.training.checkpoints import (
 from edge_ai_mass.training.config import TrainingConfig, TrainingConfigError, normalize_stages
 from edge_ai_mass.training.pipeline import TrainingPipeline
 from edge_ai_mass.training.preprocessing import DatasetBuildError, build_yolo_dataset
+from edge_ai_mass.training.publication import (
+    TrainingOutputPublisher,
+    collect_reusable_outputs,
+    restore_training_outputs,
+)
 from edge_ai_mass.training.state import PipelineState
 from edge_ai_mass.training.tracking import normalize_uri
 from edge_ai_mass.training.visualization import create_dataset_visualizations
@@ -227,6 +233,7 @@ def test_plan_and_stage_aliases_do_not_start_training(tmp_path: Path):
         "evaluate",
         "export",
         "register",
+        "publish",
     ]
     assert normalize_stages("preprocess,train") == ["preprocess", "train"]
     assert plan["checkpoint"] == "any-checkpoint.pt"
@@ -431,6 +438,126 @@ def test_checkpoint_interval_must_be_positive(tmp_path: Path):
 
     with pytest.raises(TrainingConfigError, match="interval_epochs"):
         TrainingConfig(payload, tmp_path / "config.yaml")
+
+
+def test_training_output_bundle_excludes_data_images_and_restores_checkpoints(
+    tmp_path: Path,
+):
+    config = _config(tmp_path)
+    config.payload["publication"] = {
+        "enabled": True,
+        "provider": "kaggle",
+        "dataset": "owner/training-outputs",
+        "bundle_dir": str(tmp_path / "publication"),
+        "require_checkpoint": True,
+    }
+    artifacts = config.artifacts_dir
+    (artifacts / "models").mkdir(parents=True)
+    (artifacts / "models" / "best.pt").write_bytes(b"best")
+    checkpoint = artifacts / "checkpoints" / "epoch_000005"
+    checkpoint.mkdir(parents=True)
+    (checkpoint / "weights.pt").write_bytes(b"resume")
+    (checkpoint / "metrics_history.json").write_text("{}", encoding="utf-8")
+    (checkpoint / "metrics_curves.png").write_bytes(b"plot")
+    (artifacts / "checkpoints" / "latest.json").write_text(
+        json.dumps({"weights": "epoch_000005/weights.pt"}),
+        encoding="utf-8",
+    )
+    curves = artifacts / "evaluation" / "test" / "curves"
+    curves.mkdir(parents=True)
+    (curves / "PR_curve.png").write_bytes(b"curve")
+    annotated = artifacts / "evaluation" / "test" / "annotated_samples"
+    annotated.mkdir(parents=True)
+    (annotated / "sample.jpg").write_bytes(b"raw-image")
+    batches = artifacts / "training" / "annotated_batches"
+    batches.mkdir(parents=True)
+    (batches / "train_batch0.jpg").write_bytes(b"batch")
+    config.dataset_dir.mkdir(parents=True)
+    (config.dataset_dir / "dataset_manifest.json").write_text(
+        json.dumps({"dataset_fingerprint": "data-v1"}),
+        encoding="utf-8",
+    )
+
+    selected = collect_reusable_outputs(config)
+    selected_names = {relative.as_posix() for _, relative in selected}
+    assert "models/best.pt" in selected_names
+    assert "checkpoints/epoch_000005/weights.pt" in selected_names
+    assert "checkpoints/epoch_000005/metrics_curves.png" in selected_names
+    assert "evaluation/test/curves/PR_curve.png" in selected_names
+    assert not any("annotated_samples" in name for name in selected_names)
+    assert not any("annotated_batches" in name for name in selected_names)
+    assert not any(name.endswith(".jpg") for name in selected_names)
+
+    publisher = TrainingOutputPublisher(
+        config,
+        PipelineState(artifacts / "pipeline_state.json"),
+    )
+    bundle = publisher.prepare_bundle()
+    archive = Path(bundle["archive"])
+    with zipfile.ZipFile(archive) as package:
+        names = set(package.namelist())
+    assert "models/best.pt" in names
+    assert "metadata/resolved-config.yaml" in names
+    assert "metadata/dataset-manifest.json" in names
+    assert not any("images/" in name or "labels/" in name for name in names)
+    assert not any(name.endswith(".jpg") for name in names)
+
+    restored = tmp_path / "restored-artifacts"
+    report = restore_training_outputs(archive, restored)
+    assert "checkpoints/epoch_000005/weights.pt" in report["restored"]
+    assert (restored / "checkpoints" / "epoch_000005" / "weights.pt").is_file()
+    assert not (restored / "metadata").exists()
+
+
+def test_output_publisher_creates_or_versions_kaggle_dataset(tmp_path: Path, monkeypatch):
+    import edge_ai_mass.training.publication as publication_module
+
+    config = _config(tmp_path)
+    config.payload["publication"] = {
+        "enabled": True,
+        "provider": "kaggle",
+        "dataset": "owner/training-outputs",
+        "bundle_dir": str(tmp_path / "publication"),
+        "require_checkpoint": True,
+        "version_notes": "unit-test",
+    }
+    models = config.artifacts_dir / "models"
+    models.mkdir(parents=True)
+    (models / "best.pt").write_bytes(b"model")
+    state = PipelineState(config.artifacts_dir / "pipeline_state.json")
+
+    class FakeApi:
+        def __init__(self):
+            self.created = 0
+            self.versioned = 0
+
+        def dataset_create_new(self, *args, **kwargs):
+            self.created += 1
+            return {"status": "ok"}
+
+        def dataset_create_version(self, *args, **kwargs):
+            self.versioned += 1
+            return {"status": "ok"}
+
+    api = FakeApi()
+    monkeypatch.setattr(publication_module, "_authenticate_kaggle", lambda: api)
+    monkeypatch.setattr(publication_module, "_wait_for_dataset", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        publication_module,
+        "_owned_dataset",
+        lambda *args, **kwargs: SimpleNamespace(current_version_number=3),
+    )
+    monkeypatch.setattr(publication_module, "_dataset_exists", lambda *args: False)
+
+    created = TrainingOutputPublisher(config, state).publish()
+    assert created["operation"] == "created"
+    assert created["version"] == 3
+    assert api.created == 1
+
+    monkeypatch.setattr(publication_module, "_dataset_exists", lambda *args: True)
+    versioned = TrainingOutputPublisher(config, state).publish()
+    assert versioned["operation"] == "versioned"
+    assert api.versioned == 1
 
 
 def test_tuning_guardrail_rejects_configured_params_without_distributions(tmp_path: Path):

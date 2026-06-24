@@ -50,6 +50,7 @@ eval = [
 ]
 mlops = [
     "mlflow>=2.14",
+    "zenml>=0.95,<0.96",
     "dvc>=3.50",
     "pandas>=2.0",
     "joblib>=1.3",
