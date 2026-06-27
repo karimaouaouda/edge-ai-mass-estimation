@@ -18,6 +18,7 @@ orchestration:
 data:
   output_dir: ${YOLO_DATASET_OUTPUT:data/processed/waste_seg_yolo}
   classes:
+    - organic_waste
     - plastic_bottle
     - plastic_bag
     - rigid_plastic
