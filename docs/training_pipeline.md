@@ -93,6 +93,39 @@ edge-ai-mass train --stage detection \
 
 `--skip-optuna` removes the tune stage from a full run. Preprocessing always rebuilds atomically when that stage is invoked; DVC decides when reproduction is needed. `--force` permits a changed config to replace model state under the same run name and allows registration to run again. Using a new `training.run_name` is preferred when the experiment is conceptually different.
 
+### Early stopping
+
+Final training and Optuna trial training use Ultralytics early stopping through
+the explicit pipeline config below. The trainer monitors validation fitness
+and stops once it has not improved for `patience` completed epochs; the best
+checkpoint remains `artifacts/.../models/best.pt`.
+
+```yaml
+training:
+  epochs: 100
+  early_stopping:
+    enabled: true
+    patience: 20
+```
+
+For the staged workflow, keep a larger patience on the TACO + AquaTrash
+pretraining run and usually use a smaller value during RealWaste fine-tuning:
+
+```bash
+edge-ai-mass train --stage detection \
+  --config configs/training/yolo_segmentation_pretrain.yaml \
+  --set training.early_stopping.patience=20
+
+edge-ai-mass train --stage detection \
+  --config configs/training/yolo_segmentation_fine_tune.yaml \
+  --set model.checkpoint=artifacts/training/yolo/models/best.pt \
+  --set training.early_stopping.patience=10
+```
+
+Set `training.early_stopping.enabled=false` to disable early stopping for a
+controlled full-epoch run. Optuna can still tune the active patience value with
+the existing `tuning.search_space.patience` entry.
+
 ### Periodic checkpoints and chunked training
 
 The existing `train` stage stores a resumable checkpoint every

@@ -223,6 +223,11 @@ class YOLOTrainer:
             run_dir = Path(
                 getattr(result, "save_dir", getattr(model.trainer, "save_dir", ""))
             ).resolve()
+            early_stopping = self._early_stopping_report(
+                model.trainer,
+                train_args=train_args,
+                target_epochs=target_epochs,
+            )
             source_best = run_dir / "weights" / "best.pt"
             source_last = run_dir / "weights" / "last.pt"
             if not source_best.is_file():
@@ -238,6 +243,7 @@ class YOLOTrainer:
                 shutil.copy2(source_last, last_path)
             training_metrics = normalize_metrics(getattr(model.trainer, "metrics", {}))
             tracker.log_metrics(training_metrics, prefix="train_")
+            tracker.mlflow.log_dict(early_stopping, "training/early_stopping.json")
             tracker.mlflow.log_artifact(str(best_path), artifact_path="weights")
             if last_path.is_file():
                 tracker.mlflow.log_artifact(str(last_path), artifact_path="weights")
@@ -269,6 +275,7 @@ class YOLOTrainer:
                 "best_params": best_params,
                 "best_weights": str(best_path),
                 "last_weights": str(last_path) if last_path.is_file() else None,
+                "early_stopping": early_stopping,
                 "latest_checkpoint": latest_checkpoint,
                 "checkpoints_dir": str(checkpoints_dir),
                 "ultralytics_run_dir": str(run_dir),
@@ -560,7 +567,7 @@ class YOLOTrainer:
             ),
             "batch": training.get("batch", 16),
             "imgsz": int(training.get("imgsz", 640)),
-            "patience": int(training.get("patience", 20)),
+            "patience": self._early_stopping_patience(),
             "device": training.get("device", 0),
             "workers": int(training.get("workers", 8)),
             "cache": training.get("cache", False),
@@ -585,6 +592,58 @@ class YOLOTrainer:
         args.update(training.get("extra_args", {}))
         args.update(overrides)
         return args
+
+    def _early_stopping_patience(self) -> int:
+        """Resolve pipeline early stopping to Ultralytics' patience argument.
+
+        Ultralytics monitors validation fitness internally and stops when that
+        value has not improved for ``patience`` epochs. Passing ``patience=0``
+        disables the stopper, so the pipeline keeps this native behavior while
+        exposing a clearer ``training.early_stopping`` config block.
+        """
+        training = self.config.payload["training"]
+        early_stopping = training.get("early_stopping", {})
+        legacy_patience = int(training.get("patience", 20))
+        enabled = bool(early_stopping.get("enabled", legacy_patience != 0))
+        if not enabled:
+            return 0
+        return int(early_stopping.get("patience", legacy_patience))
+
+    def _early_stopping_report(
+        self,
+        trainer: Any,
+        *,
+        train_args: dict[str, Any],
+        target_epochs: int,
+    ) -> dict[str, Any]:
+        """Create a durable summary of early-stopping state for artifacts."""
+        patience = int(train_args.get("patience", 0))
+        completed_epochs = int(getattr(trainer, "epoch", -1)) + 1
+        stopper = getattr(trainer, "stopper", None)
+        best_epoch = getattr(stopper, "best_epoch", None)
+        best_fitness = getattr(stopper, "best_fitness", None)
+        stopped_early = bool(
+            patience > 0
+            and completed_epochs > 0
+            and completed_epochs < int(target_epochs)
+            and getattr(trainer, "stop", False)
+        )
+        return {
+            "enabled": patience > 0,
+            "patience": patience,
+            "monitor": "validation_fitness",
+            "mode": "max",
+            "completed_epochs": completed_epochs,
+            "target_epochs": int(target_epochs),
+            "stopped_early": stopped_early,
+            "best_epoch": int(best_epoch) if best_epoch is not None else None,
+            "best_fitness": float(best_fitness) if best_fitness is not None else None,
+            "epochs_without_improvement": (
+                completed_epochs - int(best_epoch)
+                if best_epoch is not None and completed_epochs >= 0
+                else None
+            ),
+        }
 
     def _log_dataset_visualizations(self, tracker: MLflowSession) -> dict[str, Any]:
         report = create_dataset_visualizations(self.config)

@@ -438,6 +438,72 @@ def test_train_args_enable_checkpoint_callback_without_duplicate_epoch_weights(
     assert resolve_model_source(config).kind == "base_model"
 
 
+def test_train_args_use_configurable_early_stopping(tmp_path: Path):
+    config = _config(tmp_path)
+    config.payload["training"]["early_stopping"] = {
+        "enabled": True,
+        "patience": 7,
+    }
+    trainer = YOLOTrainer(config, PipelineState(config.artifacts_dir / "state.json"))
+
+    args = trainer._train_args({}, tuning=False, run_name=config.run_name)
+    tuned_args = trainer._train_args(
+        {"patience": 3},
+        tuning=True,
+        run_name=f"{config.run_name}-trial",
+    )
+
+    assert args["patience"] == 7
+    assert tuned_args["patience"] == 3
+
+
+def test_train_args_can_disable_early_stopping(tmp_path: Path):
+    config = _config(tmp_path)
+    config.payload["training"]["early_stopping"] = {
+        "enabled": False,
+        "patience": 7,
+    }
+    trainer = YOLOTrainer(config, PipelineState(config.artifacts_dir / "state.json"))
+
+    args = trainer._train_args({}, tuning=False, run_name=config.run_name)
+
+    assert args["patience"] == 0
+
+
+def test_early_stopping_patience_must_be_positive_when_enabled(tmp_path: Path):
+    payload = _config(tmp_path).payload
+    payload["training"]["early_stopping"] = {
+        "enabled": True,
+        "patience": 0,
+    }
+
+    with pytest.raises(TrainingConfigError, match="early_stopping.patience"):
+        TrainingConfig(payload, tmp_path / "config.yaml")
+
+
+def test_early_stopping_summary_reports_pre_target_stop(tmp_path: Path):
+    config = _config(tmp_path)
+    trainer = YOLOTrainer(config, PipelineState(config.artifacts_dir / "state.json"))
+    yolo_trainer = SimpleNamespace(
+        epoch=8,
+        stop=True,
+        stopper=SimpleNamespace(best_epoch=5, best_fitness=0.42),
+    )
+
+    report = trainer._early_stopping_report(
+        yolo_trainer,
+        train_args={"patience": 3},
+        target_epochs=100,
+    )
+
+    assert report["enabled"] is True
+    assert report["stopped_early"] is True
+    assert report["completed_epochs"] == 9
+    assert report["best_epoch"] == 5
+    assert report["best_fitness"] == 0.42
+    assert report["epochs_without_improvement"] == 4
+
+
 def test_resume_target_supports_fixed_size_training_chunks(tmp_path: Path):
     config = _config(tmp_path)
     config.payload["training"]["epochs"] = 20

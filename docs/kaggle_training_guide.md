@@ -438,6 +438,8 @@ with `resume.mode=auto` loads `checkpoints/latest.json`.
 ```python
 OVERRIDES += [
     "training.epochs=20",
+    "training.early_stopping.enabled=true",
+    "training.early_stopping.patience=10",
     "training.checkpointing.interval_epochs=5",
     "training.checkpointing.resume.mode=auto",
     "training.checkpointing.resume.additional_epochs=20",

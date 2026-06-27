@@ -114,6 +114,28 @@ class TrainingConfig:
             raise TrainingConfigError("model.task must be 'segment' or 'detect'")
 
         training = self.payload["training"]
+        early_stopping = training.get("early_stopping", {})
+        if not isinstance(early_stopping, dict):
+            raise TrainingConfigError("training.early_stopping must be a mapping")
+        legacy_patience = int(training.get("patience", 20))
+        if legacy_patience < 0:
+            raise TrainingConfigError("training.patience must be zero or greater")
+        early_stopping_patience = int(
+            early_stopping.get("patience", legacy_patience)
+        )
+        if early_stopping_patience < 0:
+            raise TrainingConfigError(
+                "training.early_stopping.patience must be zero or greater"
+            )
+        early_stopping_enabled = bool(
+            early_stopping.get("enabled", legacy_patience != 0)
+        )
+        if early_stopping_enabled and early_stopping_patience <= 0:
+            raise TrainingConfigError(
+                "training.early_stopping.patience must be greater than zero when "
+                "early stopping is enabled"
+            )
+
         checkpointing = training.get("checkpointing", {})
         if not isinstance(checkpointing, dict):
             raise TrainingConfigError("training.checkpointing must be a mapping")
