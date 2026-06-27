@@ -330,7 +330,7 @@ class YOLOTrainer:
                         )
                     ),
                     batch=int(batch/2),
-                    device="0,1",
+                    device="0",
                     conf=float(evaluation.get("conf", 0.001)),
                     iou=float(evaluation.get("iou", 0.7)),
                     plots=bool(evaluation.get("plots", True)),
