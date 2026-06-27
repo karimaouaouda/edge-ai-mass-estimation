@@ -37,6 +37,19 @@ RealWaste ------+          | manifest + DVC   |        | MLflow experiment |
 
 The current implementation targets the `detection` model stage with Ultralytics YOLO and supports both `segment` and `detect` tasks. The orchestration boundary is model-stage agnostic so a mass-regression trainer can be added later without mixing it into the edge runtime.
 
+## Execution flow
+
+The training system is not a loose collection of scripts; it is one controlled pipeline with one shared config object. The code path is:
+
+1. `edge-ai-mass train` parses the YAML config, applies any `--set` overrides, and builds a `TrainingConfig`.
+2. `TrainingPipeline.plan()` validates the requested stages, checks required Python packages, inspects data-source availability, and resolves the model/checkpoint source without mutating anything.
+3. `TrainingPipeline.run()` chooses ZenML when it is enabled, otherwise it falls back to the native runner.
+4. `TrainingPipeline.run_native()` executes the selected stages in order and writes stage results into `pipeline_state.json` under the run's artifact directory.
+5. `preprocess` materializes the merged YOLO dataset and dataset visualizations, then records the dataset fingerprint so later runs can detect drift.
+6. `tune` launches Optuna, `train` resumes from the managed checkpoint state when available, `evaluate` reloads `models/best.pt`, `export` converts that best model into deployable formats, `register` pushes the best artifact to MLflow, and `publish` packages the final outputs for external storage.
+
+The important consequence is that every stage reads the same resolved configuration and the same run-state record. That is what makes the pipeline resumable, reproducible, and safe to split across separate jobs or notebook cells.
+
 ## Install
 
 ```bash
@@ -285,19 +298,20 @@ The edge release process should consume the approved `production` version, expor
 
 ## Jupyter and Kaggle
 
-Open `notebooks/yolo_training_pipeline.ipynb`. It discovers a repository uploaded as a Kaggle dataset, adds its `src` folder to Python, binds mounted dataset paths through environment variables, and calls the same package API as the CLI.
+Open `notebooks/yolo_training_pipeline.ipynb` and clone the repository into the notebook session first. The notebook should treat GitHub as the source of truth for the code, not a Kaggle dataset upload.
 
-See `docs/kaggle_training_guide.md` for complete source-dataset and wheel upload instructions, kernel metadata, dataset bindings, offline dependencies, output persistence, and Optuna resume steps.
+Typical notebook startup flow:
 
-Recommended Kaggle layout:
+1. Clone the repository into `/kaggle/working` or the local notebook workspace.
+2. Install the project in editable mode when the environment permits it, or add the cloned `src` directory to `sys.path`.
+3. Attach only the training data as Kaggle datasets or local mounts: AquaTrash, RealWaste, and any other required image/annotation sources.
+4. Download TACO from its Hugging Face COCO JSON through the same helper used by the repository code.
+5. Build `TrainingPipeline.from_config(...)` from the checked-out repo config, apply overrides for `/kaggle/working`, then run `plan("all")` and `run("preprocess")` before starting the full training stages.
+6. Persist `/kaggle/working/artifacts` as notebook output, or point MLflow at a remote tracking server if you want the run history outside the notebook.
 
-1. Upload this repository or its built wheel as a private module dataset.
-2. Attach AquaTrash images/COCO labels, raw RealWaste, and the separate RealWaste segmentation JSON; TACO is downloaded from its Hugging Face COCO JSON into `/kaggle/working`.
-3. Set the path variables shown in the notebook.
-4. Run `preprocess`, inspect the mosaics and manifest, then set `TRAIN_STAGES=tune,train,evaluate,export,register`.
-5. Persist `/kaggle/working/artifacts` as a notebook output, or point MLflow to a remote server.
+See `docs/kaggle_training_guide.md` for the notebook-oriented setup details, but treat the repository checkout itself as code cloned from GitHub rather than as a data artifact.
 
-The notebook contains no duplicated preprocessing or training implementation, which keeps local, CI, and Kaggle behavior aligned.
+The notebook contains no duplicated preprocessing or training implementation, which keeps local, CI, and notebook behavior aligned.
 
 ## Durable outputs
 

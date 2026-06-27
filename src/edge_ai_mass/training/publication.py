@@ -250,24 +250,46 @@ def restore_training_outputs(
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     restored: list[str] = []
-    with zipfile.ZipFile(archive) as bundle:
-        for member in bundle.infolist():
-            relative = Path(member.filename)
-            if not relative.parts or relative.parts[0] == "metadata":
+    
+    if archive.is_file() and zipfile.is_zipfile(archive):
+        with zipfile.ZipFile(archive) as bundle:
+            for member in bundle.infolist():
+                relative = Path(member.filename)
+                if not relative.parts or relative.parts[0] == "metadata":
+                    continue
+                if relative.is_absolute() or ".." in relative.parts:
+                    raise ValueError(f"Unsafe path in training-output archive: {member.filename}")
+                target = (destination / relative).resolve()
+                if destination.resolve() not in target.parents:
+                    raise ValueError(f"Archive path escapes destination: {member.filename}")
+                if target.exists() and not overwrite:
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with bundle.open(member) as source, target.open("wb") as output:
+                    shutil.copyfileobj(source, output)
+                restored.append(relative.as_posix())
+        _sanitize_restored_state(destination)
+        return {"archive": str(archive), "destination": str(destination), "restored": restored}
+    
+    
+    # here the output can be folder downloaded from Kaggle, so we just copy the files over
+    if archive.is_dir():
+        for path in archive.rglob("*"):
+            if not path.is_file():
                 continue
-            if relative.is_absolute() or ".." in relative.parts:
-                raise ValueError(f"Unsafe path in training-output archive: {member.filename}")
+            relative = path.relative_to(archive)
+            if relative.parts[0] == "metadata":
+                continue
             target = (destination / relative).resolve()
             if destination.resolve() not in target.parents:
-                raise ValueError(f"Archive path escapes destination: {member.filename}")
+                raise ValueError(f"Archive path escapes destination: {relative.as_posix()}")
             if target.exists() and not overwrite:
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
-            with bundle.open(member) as source, target.open("wb") as output:
-                shutil.copyfileobj(source, output)
+            shutil.copy2(path, target)
             restored.append(relative.as_posix())
-    _sanitize_restored_state(destination)
-    return {"archive": str(archive), "destination": str(destination), "restored": restored}
+        _sanitize_restored_state(destination)
+        return {"archive": str(archive), "destination": str(destination), "restored": restored}
 
 
 def _sanitize_restored_state(destination: Path) -> None:

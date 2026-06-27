@@ -1,8 +1,8 @@
 # Running the YOLO training pipeline on Kaggle
 
-This guide explains how to upload the project as an importable Kaggle dataset, attach the training data, start the governed pipeline, persist its outputs, and resume an Optuna study in another Kaggle session.
+This guide explains how to clone the project from GitHub inside Kaggle, attach the training data, start the governed pipeline, persist its outputs, and resume an Optuna study in another Kaggle session.
 
-The recommended Kaggle setup separates code from data:
+The recommended Kaggle setup separates code from data, but the code comes from a GitHub checkout rather than a packaged source dataset:
 
 ```text
 Kaggle notebook
@@ -15,11 +15,31 @@ Kaggle notebook
 
 TACO is not attached as a Kaggle dataset. The notebook downloads its COCO `annotations.json` from Hugging Face and installs the referenced images under `/kaggle/working/data/raw/taco`. Kaggle mounts the remaining attached datasets read-only under `/kaggle/input`; all downloaded and generated state stays under `/kaggle/working`.
 
-## 1. Prepare the project as an importable dataset
+## 1. Clone the repository into the notebook workspace
 
-There are two supported approaches. The source-tree approach is easiest while developing. A wheel is cleaner for repeatable released training jobs.
+There are two supported approaches. Cloning the repository is the default and easiest path while developing. A wheel is cleaner for repeatable released training jobs, but it is optional when the notebook can clone GitHub directly.
 
-For this repository, the direct and recommended workflow is already automated:
+Start from GitHub and keep the checkout in `/kaggle/working`:
+
+```bash
+cd /kaggle/working
+git clone https://github.com/<owner>/edge-ai-mass-estimation.git
+cd edge-ai-mass-estimation
+```
+
+Install the project from the checkout:
+
+```python
+%pip install -e .
+```
+
+If the notebook environment needs the extra training dependencies, install the MLOps extras as well:
+
+```python
+%pip install -e ".[mlops]"
+```
+
+For this repository, the packaging workflow is still automated when you want it:
 
 ```powershell
 # Validate and build builds/kaggle/edge-ai-mass-module/edge_ai_mass_module.zip
@@ -31,7 +51,7 @@ python scripts/publish_kaggle_training.py publish `
   --message "Update governed YOLO training pipeline"
 ```
 
-The equivalent dataset-only Bash automation is:
+The equivalent packaging-only Bash automation is:
 
 ```bash
 bash scripts/publish_kaggle_dataset.sh \
@@ -40,7 +60,7 @@ bash scripts/publish_kaggle_dataset.sh \
 
 The wrapper automatically selects `.venv/Scripts/python.exe` on Windows/Git Bash or `.venv/bin/python` on Linux, and accepts `PYTHON=/custom/python` when needed.
 
-The helper validates every notebook code cell, excludes caches, weights, runs and invalid legacy scripts, creates a deterministic module archive with checksums, updates the existing private module dataset, and only then pushes the GPU kernel. Use `--skip-module` or `--skip-kernel` when publishing only one side.
+The helper validates every notebook code cell, excludes caches, weights, runs and invalid legacy scripts, creates a deterministic module archive with checksums, updates the existing private module dataset or wheel bundle, and only then pushes the GPU kernel. Use `--skip-module` or `--skip-kernel` when publishing only one side.
 
 ### Option A: upload the generated module archive
 

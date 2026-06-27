@@ -18,7 +18,8 @@ env/
 .idea/
 *.swp
 *.swo
-
+kaggle-output
+kaggle-output.zip
 # Data (large files tracked separately or via DVC)
 data/raw/*
 data/processed/*

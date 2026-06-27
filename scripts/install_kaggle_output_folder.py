@@ -22,7 +22,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-
 def configure_utf8_streams() -> None:
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
     for stream in (sys.stdout, sys.stderr):
@@ -151,12 +150,55 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--force", action="store_true", help="Replace existing downloads/install directory.")
     parser.add_argument("--keep-download", action="store_true", help="Keep the intermediate downloaded output files.")
     parser.add_argument("--quiet", action="store_true", help="Reduce Kaggle API output.")
+    
+    
+    parser.add_argument("--test", type=Path, required=False, help="indicate whether on test or not.")
     return parser.parse_args()
 
+
+def search_by_pattern(pattern: str, files: list[str]) -> list[str]:
+    regex = re.compile(pattern)
+    return [file for file in files if regex.match(file)]
+
+
+def test_run():
+    import kaggle
+    from kagglesdk.kernels.types.kernels_api_service import ApiListKernelSessionOutputRequest
+    configure_utf8_streams()
+    api = authenticate_kaggle()
+    res = api.kernels_list_files(
+        "karimaouaouda/yolo-train-pipeline",
+    )
+    
+    request = ApiListKernelSessionOutputRequest()
+    request.user_name = "karimaouaouda"
+    request.kernel_slug = "yolo-train-pipeline"
+    with api.build_kaggle_client() as client:
+        response = client.kernels.kernels_api_client.list_kernel_session_output(request)
+        
+    next_token = response.next_page_token
+    i = 1
+    while next_token:
+        print(f"- page {i}:")
+        print(f"files : {len(response.files)}, last file : {response.files[-1].fileName}")
+        i += 1
+        request.page_token = next_token
+        with api.build_kaggle_client() as client:
+            response = client.kernels.kernels_api_client.list_kernel_session_output(request)
+            
+            next_token = response.next_page_token
+            
+            
+    print(f"files : {len(response.files)}, with token : {response.next_page_token}")    
+    return res
 
 def main() -> None:
     configure_utf8_streams()
     args = parse_args()
+    if args.test:
+        print("Running in test mode. No files will be downloaded or installed.")
+        test_run()
+        return
     output_folder = normalize_output_folder(args.output_folder)
 
     if args.download_dir is None:
