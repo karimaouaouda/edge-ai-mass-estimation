@@ -316,7 +316,7 @@ class YOLOTrainer:
                         )
                     ),
                     batch=evaluation.get("batch", self.config.payload["training"].get("batch", 16)),
-                    device="0,1",
+                    device="1",
                     conf=float(evaluation.get("conf", 0.001)),
                     iou=float(evaluation.get("iou", 0.7)),
                     plots=bool(evaluation.get("plots", True)),
