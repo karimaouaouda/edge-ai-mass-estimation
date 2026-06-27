@@ -299,8 +299,8 @@ class YOLOTrainer:
         reports: dict[str, Any] = {}
         artifact_reports: dict[str, Any] = {}
         evaluation_root = self.artifacts_dir / "evaluation"
-        
-        
+        gc.collect()
+        torch.cuda.empty_cache()
         batch = evaluation.get("batch", self.config.payload["training"].get("batch", 16))
         
         with tracker.run(), torch.no_grad():
