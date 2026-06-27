@@ -303,7 +303,6 @@ class YOLOTrainer:
         
         batch = evaluation.get("batch", self.config.payload["training"].get("batch", 16))
         
-        print(f"batch size will be used : ", batch)
         with tracker.run(), torch.no_grad():
             model.eval()
             
@@ -320,7 +319,7 @@ class YOLOTrainer:
                             "imgsz", self.config.payload["training"].get("imgsz", 640)
                         )
                     ),
-                    batch=evaluation.get("batch", self.config.payload["training"].get("batch", 16)),
+                    batch=int(batch/2),
                     device=[0, 1],
                     conf=float(evaluation.get("conf", 0.001)),
                     iou=float(evaluation.get("iou", 0.7)),
