@@ -157,6 +157,9 @@ class TrainingPipeline:
         stages = normalize_stages(stage)
         self._prepare_state(force=force)
         trainer = YOLOTrainer(self.config, self.state)
+        
+        
+        print(f"stages to be executed : ", stages)
         results: dict[str, Any] = {}
         for execution_stage in stages:
             if execution_stage == "preprocess":
