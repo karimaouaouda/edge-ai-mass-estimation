@@ -302,6 +302,8 @@ class YOLOTrainer:
         gc.collect()
         torch.cuda.empty_cache()
         batch = evaluation.get("batch", self.config.payload["training"].get("batch", 16))
+        
+        print("train on cuda device : ", self.config.payload["training"].get("device", 0))
         with tracker.run(), torch.no_grad():
             model.eval()
             
@@ -319,7 +321,7 @@ class YOLOTrainer:
                         )
                     ),
                     batch=int(batch/2),
-                    device="cpu",
+                    device="0,1",
                     conf=float(evaluation.get("conf", 0.001)),
                     iou=float(evaluation.get("iou", 0.7)),
                     plots=bool(evaluation.get("plots", True)),
