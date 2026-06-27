@@ -1,0 +1,65 @@
+# Training Run Summary
+
+This summary describes the installed YOLO segmentation run. The artifacts show a configured target of 60 epochs and an installed final checkpoint with 54 completed epochs, so the final-run status needs Karim confirmation.
+
+## Core Run Metadata
+
+| item | value | source_file | notes |
+| --- | --- | --- | --- |
+| artifact_root | kaggle-output | kaggle-output | Installed artifact root supplied by prompt. |
+| canonical_run_root | kaggle-output/artifacts/training/yolo/waste-seg-yolo | kaggle-output/artifacts/training/yolo/waste-seg-yolo | Primary run directory analyzed. |
+| mlflow_run_id | e5e5723dba6c44e490577a327c338ee1 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/pipeline_state.json | Run id from pipeline_state.json. |
+| task_type | segment | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | YOLO task. |
+| model_checkpoint | /kaggle/working/yolo26m-seg.pt | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Base model/checkpoint used to start training. |
+| dataset_yaml_path | /kaggle/working/data/processed/waste_seg_yolo/dataset.yaml | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Dataset YAML consumed by Ultralytics. |
+| target_epochs | 60 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Configured target epochs. |
+| completed_epochs | 54 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/checkpoints/latest.json | Installed final checkpoint completed epochs. |
+| image_size | 640 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Training image size. |
+| batch_size | 32 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Final training batch size. |
+| optimizer | SGD | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Final training optimizer. |
+| learning_rate_lr0 | 0.011031 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Initial learning rate. |
+| learning_rate_lrf | 0.039463 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Final LR multiplier. |
+| device | 0 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Training device. |
+| run_name | waste-seg-yolo | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Ultralytics run name. |
+| start_timestamp | [NOT_FOUND_IN_ARTIFACTS] | [NOT_FOUND_IN_ARTIFACTS] | No explicit run start timestamp found. |
+| end_timestamp | [NOT_FOUND_IN_ARTIFACTS] | [NOT_FOUND_IN_ARTIFACTS] | No explicit run end timestamp found. |
+| checkpoint_created_at | 2026-06-25T11:40:12.264063+00:00 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/checkpoints/latest.json | Timestamp recorded in latest checkpoint manifest. |
+| best_checkpoint_path | kaggle-output/artifacts/training/yolo/waste-seg-yolo/models/best.pt | kaggle-output/artifacts/training/yolo/waste-seg-yolo/reports/training_summary.json | Best model path from training_summary.json, localized to installed artifacts. |
+| last_checkpoint_path | kaggle-output/artifacts/training/yolo/waste-seg-yolo/models/last.pt | kaggle-output/artifacts/training/yolo/waste-seg-yolo/reports/training_summary.json | Last model path from training_summary.json, localized to installed artifacts. |
+| export_enabled | false | kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/configuration/resolved_config.json | Resolved config says export is disabled in the installed run. |
+| export_artifacts | [NOT_FOUND_IN_ARTIFACTS] | kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/configuration/resolved_config.json | No ONNX/TensorRT export files or exports_manifest.json were discovered. |
+| optuna_best_metric | mask_map50_95 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/optimization/optuna_best.json | Optuna optimization objective. |
+| optuna_best_value | 0.562886 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/optimization/optuna_best.json | Tuning objective value, not a final test metric. |
+| optuna_completed_trials | 10 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/optimization/optuna_best.json | Trials attempted in installed artifact set. |
+
+## Tuned Training and Augmentation Parameters
+
+| item | value | source_file | notes |
+| --- | --- | --- | --- |
+| augmentation_or_training_param_augment | false | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Tuned final training parameter. |
+| augmentation_or_training_param_hsv_h | 0.04064 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Tuned final training parameter. |
+| augmentation_or_training_param_hsv_s | 0.863074 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Tuned final training parameter. |
+| augmentation_or_training_param_hsv_v | 0.693001 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Tuned final training parameter. |
+| augmentation_or_training_param_degrees | 11.300673 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Tuned final training parameter. |
+| augmentation_or_training_param_translate | 0.094065 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Tuned final training parameter. |
+| augmentation_or_training_param_scale | 0.495575 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Tuned final training parameter. |
+| augmentation_or_training_param_shear | 0.113536 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Tuned final training parameter. |
+| augmentation_or_training_param_perspective | 0.000469 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Tuned final training parameter. |
+| augmentation_or_training_param_flipud | 0.028152 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Tuned final training parameter. |
+| augmentation_or_training_param_fliplr | 0.309409 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Tuned final training parameter. |
+| augmentation_or_training_param_mosaic | 0.083501 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Tuned final training parameter. |
+| augmentation_or_training_param_mixup | 0.233144 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Tuned final training parameter. |
+| augmentation_or_training_param_cutmix | 0.167521 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Tuned final training parameter. |
+| augmentation_or_training_param_copy_paste | 0.212111 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Tuned final training parameter. |
+| augmentation_or_training_param_copy_paste_mode | flip | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Tuned final training parameter. |
+| augmentation_or_training_param_multi_scale | 0.324605 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Tuned final training parameter. |
+| augmentation_or_training_param_freeze | 5 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Tuned final training parameter. |
+| augmentation_or_training_param_mask_ratio | 8 | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Tuned final training parameter. |
+| augmentation_or_training_param_overlap_mask | false | kaggle-output/artifacts/training/yolo/waste-seg-yolo/training_runs/waste-seg-yolo/args.yaml | Tuned final training parameter. |
+
+## Interpretation
+
+- The task is segmentation (`task: segment`) and the base model/checkpoint is `yolo26m-seg.pt`.
+- The final training configuration used batch size 32, image size 640, optimizer SGD, and device `0`.
+- Optuna was enabled with `mask_map50_95` as the objective. The Optuna best value belongs to the tuning study and should not be reported as the final model validation/test score.
+- No export artifacts were found, and the resolved configuration records `export.enabled=false`.

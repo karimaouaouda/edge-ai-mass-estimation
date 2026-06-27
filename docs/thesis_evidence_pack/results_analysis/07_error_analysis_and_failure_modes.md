@@ -1,0 +1,12 @@
+# Error Analysis and Failure Modes
+
+The table below combines structured metrics with visual evidence. Confidence reflects evidence strength in the installed artifacts, not model certainty.
+
+| Observed issue | Evidence artifact | Possible cause | Thesis interpretation | Suggested mitigation | Confidence |
+| --- | --- | --- | --- | --- | --- |
+| Background/false-negative errors for plastic_bag | confusion_matrix_normalized.png shows high background value for plastic_bag; val_batch examples include missed plastic_bag labels | small/deformable objects, clutter, annotation difficulty | Discuss as a key validation failure mode, not as a test-set result. | more plastic-bag examples, targeted augmentation, inspect labels | medium |
+| Mixed waste lower class performance | MaskPR_curve.png shows mixed_waste AP@0.5 = 0.447; confusion_matrix_normalized.png diagonal about 0.43 | heterogeneous class definition, visual similarity to other debris, background clutter | Mixed waste is broad and may be difficult for a compact segmentation model. | review taxonomy, split subclasses if needed, collect examples | medium |
+| Rigid plastic moderate/weak segmentation | MaskPR_curve.png shows rigid_plastic AP@0.5 = 0.464; confusion_matrix_normalized.png diagonal about 0.49 | visual similarity with plastic bottle/bag or background; needs confirmation | Report as a weaker class supported by visual curve evidence. | class-specific validation audit and additional examples | medium |
+| Class imbalance | dataset_manifest.json class counts and labels.jpg | dataset composition: mixed_waste and rigid_plastic have more instances than glass or plastic_bottle | May influence learned decision boundaries and thesis discussion of dataset limitations. | rebalance sampling, class-aware augmentation, collect underrepresented classes | high |
+| Qualitative missed detections and substitutions | val_batch0_labels.jpg compared with val_batch0_pred.jpg | small/occluded objects, cluttered outdoor scenes, confidence threshold behavior | Use as qualitative examples only. | inspect more batches, tune confidence threshold, add hard negatives | low |
+| No test-set performance artifact | dataset_manifest.json has a test split, but no evaluation.json/test metrics file was found | evaluation stage may not have run or was not included in installed artifacts | Do not claim test performance. | run/export a test evaluation report later, without changing these artifact claims | high |

@@ -1,0 +1,71 @@
+scope,split,source,class_name,images,instances,source_file,notes
+overall,all,all,organic_waste,6460,727,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Class total summed from split instances_by_class.
+overall,all,all,plastic_bottle,6460,684,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Class total summed from split instances_by_class.
+overall,all,all,plastic_bag,6460,912,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Class total summed from split instances_by_class.
+overall,all,all,rigid_plastic,6460,1574,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Class total summed from split instances_by_class.
+overall,all,all,metal_can,6460,1185,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Class total summed from split instances_by_class.
+overall,all,all,glass,6460,708,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Class total summed from split instances_by_class.
+overall,all,all,paper_cardboard,6460,1502,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Class total summed from split instances_by_class.
+overall,all,all,mixed_waste,6460,2410,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Class total summed from split instances_by_class.
+split_summary,test,all,all,969,1574,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Split summary from dataset_manifest.json.
+split_by_source,test,aquatrash,all,55,,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Image count by source in split.
+split_by_source,test,realwaste,all,689,,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Image count by source in split.
+split_by_source,test,taco,all,225,,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Image count by source in split.
+split_by_class,test,all,glass,,173,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,test,all,metal_can,,212,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,test,all,mixed_waste,,386,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,test,all,organic_waste,,110,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,test,all,paper_cardboard,,241,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,test,all,plastic_bag,,110,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,test,all,plastic_bottle,,114,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,test,all,rigid_plastic,,228,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_summary,train,all,all,4522,6614,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Split summary from dataset_manifest.json.
+split_by_source,train,aquatrash,all,258,,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Image count by source in split.
+split_by_source,train,realwaste,all,3214,,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Image count by source in split.
+split_by_source,train,taco,all,1050,,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Image count by source in split.
+split_by_class,train,all,glass,,434,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,train,all,metal_can,,774,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,train,all,mixed_waste,,1657,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,train,all,organic_waste,,508,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,train,all,paper_cardboard,,1043,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,train,all,plastic_bag,,664,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,train,all,plastic_bottle,,457,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,train,all,rigid_plastic,,1077,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_summary,val,all,all,969,1514,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Split summary from dataset_manifest.json.
+split_by_source,val,aquatrash,all,55,,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Image count by source in split.
+split_by_source,val,realwaste,all,689,,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Image count by source in split.
+split_by_source,val,taco,all,225,,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Image count by source in split.
+split_by_class,val,all,glass,,101,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,val,all,metal_can,,199,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,val,all,mixed_waste,,367,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,val,all,organic_waste,,109,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,val,all,paper_cardboard,,218,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,val,all,plastic_bag,,138,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,val,all,plastic_bottle,,113,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+split_by_class,val,all,rigid_plastic,,269,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Instance count by class in split.
+source_summary,all,aquatrash,all,368,450,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source summary from dataset_manifest.json.
+source_by_class,all,aquatrash,glass,,38,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_by_class,all,aquatrash,metal_can,,102,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_by_class,all,aquatrash,mixed_waste,,128,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_by_class,all,aquatrash,paper_cardboard,,51,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_by_class,all,aquatrash,plastic_bag,,16,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_by_class,all,aquatrash,plastic_bottle,,66,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_by_class,all,aquatrash,rigid_plastic,,49,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_summary,all,realwaste,all,4592,4623,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source summary from dataset_manifest.json.
+source_by_class,all,realwaste,glass,,426,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_by_class,all,realwaste,metal_can,,538,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_by_class,all,realwaste,mixed_waste,,999,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_by_class,all,realwaste,organic_waste,,719,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_by_class,all,realwaste,paper_cardboard,,977,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_by_class,all,realwaste,plastic_bag,,69,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_by_class,all,realwaste,plastic_bottle,,292,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_by_class,all,realwaste,rigid_plastic,,603,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_summary,all,taco,all,1500,4629,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source summary from dataset_manifest.json.
+source_by_class,all,taco,glass,,244,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_by_class,all,taco,metal_can,,545,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_by_class,all,taco,mixed_waste,,1283,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_by_class,all,taco,organic_waste,,8,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_by_class,all,taco,paper_cardboard,,474,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_by_class,all,taco,plastic_bag,,827,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_by_class,all,taco,plastic_bottle,,326,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.
+source_by_class,all,taco,rigid_plastic,,922,kaggle-output/mlruns/1/e5e5723dba6c44e490577a327c338ee1/artifacts/lineage/dataset_manifest.json,Source instance count by class.

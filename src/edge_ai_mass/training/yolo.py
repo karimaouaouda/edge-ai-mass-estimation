@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from PIL import Image
+import torch
 
 from edge_ai_mass.training.checkpoints import (
     CheckpointStore,
@@ -298,11 +299,14 @@ class YOLOTrainer:
         reports: dict[str, Any] = {}
         artifact_reports: dict[str, Any] = {}
         evaluation_root = self.artifacts_dir / "evaluation"
-        with tracker.run():
+        with tracker.run(), torch.no_grad():
+            model.eval()
+            
             for split in evaluation.get("splits", ["val", "test"]):
                 split_dir = evaluation_root / str(split)
                 if split_dir.exists():
                     shutil.rmtree(split_dir)
+                    
                 metrics = model.val(
                     data=str(self.config.dataset_dir / "dataset.yaml"),
                     split=str(split),

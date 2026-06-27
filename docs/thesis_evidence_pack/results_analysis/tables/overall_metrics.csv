@@ -1,0 +1,55 @@
+metric,value,source_file,epoch_or_step,notes
+final_epoch:train/box_loss,0.36609,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+final_epoch:train/seg_loss,0.4904,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+final_epoch:train/cls_loss,1.62279,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+final_epoch:train/dfl_loss,0.00376,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+final_epoch:train/sem_loss,0.17375,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+final_epoch:val/box_loss,0.28647,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+final_epoch:val/seg_loss,0.36691,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+final_epoch:val/cls_loss,2.33211,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+final_epoch:val/dfl_loss,0.00253,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+final_epoch:val/sem_loss,0,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+final_epoch:metrics/precision(B),0.80488,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+final_epoch:metrics/recall(B),0.5701,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+final_epoch:metrics/mAP50(B),0.64057,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+final_epoch:metrics/mAP50-95(B),0.59791,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+final_epoch:metrics/precision(M),0.79622,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+final_epoch:metrics/recall(M),0.56408,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+final_epoch:metrics/mAP50(M),0.6208,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+final_epoch:metrics/mAP50-95(M),0.52755,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+final_epoch:lr/pg0,0.000787235,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+final_epoch:lr/pg1,0.000787235,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+final_epoch:lr/pg2,0.000787235,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,54,Final row in installed results.csv.
+best_csv_epoch:metrics/mAP50-95(M),0.53016,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,44,Best value for this metric across results.csv rows.
+best_csv_epoch:metrics/mAP50(M),0.62829,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,38,Best value for this metric across results.csv rows.
+best_csv_epoch:metrics/precision(M),0.82881,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,52,Best value for this metric across results.csv rows.
+best_csv_epoch:metrics/recall(M),0.58734,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,45,Best value for this metric across results.csv rows.
+best_csv_epoch:metrics/mAP50-95(B),0.59979,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,44,Best value for this metric across results.csv rows.
+best_csv_epoch:metrics/mAP50(B),0.64911,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,44,Best value for this metric across results.csv rows.
+best_csv_epoch:metrics/precision(B),0.82782,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,53,Best value for this metric across results.csv rows.
+best_csv_epoch:metrics/recall(B),0.60674,kaggle-output/artifacts/training/yolo/waste-seg-yolo/training/curves/results.csv,48,Best value for this metric across results.csv rows.
+training_summary:box_map50,0.649014,kaggle-output/artifacts/training/yolo/waste-seg-yolo/reports/training_summary.json,best-model summary,Metric from training_summary.json; treat as validation unless Karim confirms otherwise.
+training_summary:box_map50_95,0.599596,kaggle-output/artifacts/training/yolo/waste-seg-yolo/reports/training_summary.json,best-model summary,Metric from training_summary.json; treat as validation unless Karim confirms otherwise.
+training_summary:mask_map50,0.627705,kaggle-output/artifacts/training/yolo/waste-seg-yolo/reports/training_summary.json,best-model summary,Metric from training_summary.json; treat as validation unless Karim confirms otherwise.
+training_summary:mask_map50_95,0.530008,kaggle-output/artifacts/training/yolo/waste-seg-yolo/reports/training_summary.json,best-model summary,Metric from training_summary.json; treat as validation unless Karim confirms otherwise.
+training_summary:metrics/mAP50(B),0.649014,kaggle-output/artifacts/training/yolo/waste-seg-yolo/reports/training_summary.json,best-model summary,Metric from training_summary.json; treat as validation unless Karim confirms otherwise.
+training_summary:metrics/mAP50(M),0.627705,kaggle-output/artifacts/training/yolo/waste-seg-yolo/reports/training_summary.json,best-model summary,Metric from training_summary.json; treat as validation unless Karim confirms otherwise.
+training_summary:metrics/mAP50-95(B),0.599596,kaggle-output/artifacts/training/yolo/waste-seg-yolo/reports/training_summary.json,best-model summary,Metric from training_summary.json; treat as validation unless Karim confirms otherwise.
+training_summary:metrics/mAP50-95(M),0.530008,kaggle-output/artifacts/training/yolo/waste-seg-yolo/reports/training_summary.json,best-model summary,Metric from training_summary.json; treat as validation unless Karim confirms otherwise.
+training_summary:metrics/precision(B),0.803843,kaggle-output/artifacts/training/yolo/waste-seg-yolo/reports/training_summary.json,best-model summary,Metric from training_summary.json; treat as validation unless Karim confirms otherwise.
+training_summary:metrics/precision(M),0.793789,kaggle-output/artifacts/training/yolo/waste-seg-yolo/reports/training_summary.json,best-model summary,Metric from training_summary.json; treat as validation unless Karim confirms otherwise.
+training_summary:metrics/recall(B),0.590039,kaggle-output/artifacts/training/yolo/waste-seg-yolo/reports/training_summary.json,best-model summary,Metric from training_summary.json; treat as validation unless Karim confirms otherwise.
+training_summary:metrics/recall(M),0.582536,kaggle-output/artifacts/training/yolo/waste-seg-yolo/reports/training_summary.json,best-model summary,Metric from training_summary.json; treat as validation unless Karim confirms otherwise.
+latest_checkpoint:metrics/mAP50(B),0.64057,kaggle-output/artifacts/training/yolo/waste-seg-yolo/checkpoints/latest.json,54,Metric snapshot in latest checkpoint pointer.
+latest_checkpoint:metrics/mAP50(M),0.6208,kaggle-output/artifacts/training/yolo/waste-seg-yolo/checkpoints/latest.json,54,Metric snapshot in latest checkpoint pointer.
+latest_checkpoint:metrics/mAP50-95(B),0.59791,kaggle-output/artifacts/training/yolo/waste-seg-yolo/checkpoints/latest.json,54,Metric snapshot in latest checkpoint pointer.
+latest_checkpoint:metrics/mAP50-95(M),0.52755,kaggle-output/artifacts/training/yolo/waste-seg-yolo/checkpoints/latest.json,54,Metric snapshot in latest checkpoint pointer.
+latest_checkpoint:metrics/precision(B),0.80488,kaggle-output/artifacts/training/yolo/waste-seg-yolo/checkpoints/latest.json,54,Metric snapshot in latest checkpoint pointer.
+latest_checkpoint:metrics/precision(M),0.79622,kaggle-output/artifacts/training/yolo/waste-seg-yolo/checkpoints/latest.json,54,Metric snapshot in latest checkpoint pointer.
+latest_checkpoint:metrics/recall(B),0.5701,kaggle-output/artifacts/training/yolo/waste-seg-yolo/checkpoints/latest.json,54,Metric snapshot in latest checkpoint pointer.
+latest_checkpoint:metrics/recall(M),0.56408,kaggle-output/artifacts/training/yolo/waste-seg-yolo/checkpoints/latest.json,54,Metric snapshot in latest checkpoint pointer.
+latest_checkpoint:val/box_loss,0.28647,kaggle-output/artifacts/training/yolo/waste-seg-yolo/checkpoints/latest.json,54,Metric snapshot in latest checkpoint pointer.
+latest_checkpoint:val/cls_loss,2.33211,kaggle-output/artifacts/training/yolo/waste-seg-yolo/checkpoints/latest.json,54,Metric snapshot in latest checkpoint pointer.
+latest_checkpoint:val/dfl_loss,0.00253,kaggle-output/artifacts/training/yolo/waste-seg-yolo/checkpoints/latest.json,54,Metric snapshot in latest checkpoint pointer.
+latest_checkpoint:val/seg_loss,0.36691,kaggle-output/artifacts/training/yolo/waste-seg-yolo/checkpoints/latest.json,54,Metric snapshot in latest checkpoint pointer.
+latest_checkpoint:val/sem_loss,0,kaggle-output/artifacts/training/yolo/waste-seg-yolo/checkpoints/latest.json,54,Metric snapshot in latest checkpoint pointer.
