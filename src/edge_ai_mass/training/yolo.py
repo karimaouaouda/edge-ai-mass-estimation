@@ -312,7 +312,7 @@ class YOLOTrainer:
         
         print("train on cuda device : ", self.config.payload["training"].get("device", 0))
         
-        print(f"train on batch ")
+        print(f"train on batch {batch if batch is not None else 'auto'}")
         with tracker.run(), torch.no_grad():
             model.eval()
             
@@ -329,7 +329,7 @@ class YOLOTrainer:
                             "imgsz", self.config.payload["training"].get("imgsz", 640)
                         )
                     ),
-                    batch=int(batch/2),
+                    batch=batch,
                     device="0",
                     conf=float(evaluation.get("conf", 0.001)),
                     iou=float(evaluation.get("iou", 0.7)),
