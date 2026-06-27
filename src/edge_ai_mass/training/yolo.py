@@ -299,7 +299,6 @@ class YOLOTrainer:
         reports: dict[str, Any] = {}
         artifact_reports: dict[str, Any] = {}
         evaluation_root = self.artifacts_dir / "evaluation"
-        model = torch.nn.DataParallel(model) if torch.cuda.device_count() > 1 else model
         with tracker.run(), torch.no_grad():
             model.eval()
             
