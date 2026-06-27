@@ -124,6 +124,7 @@ def evaluate_stage(
     force: bool,
     upstream: str,
 ) -> str:
+    print(f"evaluate_stage : ", enabled)
     return _execute_stage(
         stage_name="evaluate",
         enabled=enabled,
