@@ -60,22 +60,6 @@ data:
     seed: 42
 
   sources:
-    - name: taco
-      required: true
-      annotations: ${TACO_ANNOTATIONS:data/raw/taco/annotations.json}
-      images: ${TACO_IMAGES:data/raw/taco}
-      resolver: taco
-      unknown_category: error
-      allow_bbox_fallback: false
-
-    - name: aquatrash
-      required: true
-      annotations: ${AQUATRASH_ANNOTATIONS:data/raw/aquatrash/annotations.json}
-      images: ${AQUATRASH_IMAGES:data/raw/aquatrash/Images}
-      resolver: direct
-      unknown_category: error
-      allow_bbox_fallback: false
-
     - name: realwaste
       required: true
       # The raw dataset keeps its original, non-project class folders under
