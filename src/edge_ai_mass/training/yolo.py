@@ -304,6 +304,8 @@ class YOLOTrainer:
         batch = evaluation.get("batch", self.config.payload["training"].get("batch", 16))
         
         print("train on cuda device : ", self.config.payload["training"].get("device", 0))
+        
+        print(f"train on batch ")
         with tracker.run(), torch.no_grad():
             model.eval()
             
