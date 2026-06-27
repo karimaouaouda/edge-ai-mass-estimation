@@ -60,21 +60,36 @@ data:
     seed: 42
 
   sources:
-    - name: taco
+    - name: realwaste
       required: true
-      annotations: ${TACO_ANNOTATIONS:data/raw/taco/annotations.json}
-      images: ${TACO_IMAGES:data/raw/taco}
-      resolver: taco
-      unknown_category: error
-      allow_bbox_fallback: false
-
-    - name: aquatrash
-      required: true
-      annotations: ${AQUATRASH_ANNOTATIONS:data/raw/aquatrash/annotations.json}
-      images: ${AQUATRASH_IMAGES:data/raw/aquatrash/Images}
+      # The raw dataset keeps its original, non-project class folders under
+      # realwaste-main/RealWaste/. Those folder names are intentionally ignored:
+      # annotation category_id -> COCO categories[].name is the label authority.
+      annotations: ${REALWASTE_ANNOTATIONS:data/annotations/realwaste/annotations.json}
+      images: ${REALWASTE_IMAGES:data/raw/realwaste-main/RealWaste}
+      # REALWASTE_IMAGES may point either to the Kaggle dataset mount, its
+      # realwaste-main directory, or the final RealWaste directory. The first
+      # existing candidate below becomes the effective image root.
+      images_root_candidates: [realwaste-main/RealWaste, RealWaste, .]
+      # Segmentation generators often retain the original relative path in
+      # source_file_name while file_name points to a flattened output copy.
+      file_name_fields: [source_file_name, file_name]
+      # Accept JSON paths rooted above the configured RealWaste image directory.
+      strip_path_prefixes: [realwaste-main/RealWaste, RealWaste]
+      # Last-resort lookup is allowed only when a basename is unique across all
+      # original class folders; ambiguous filenames are reported as missing.
+      recursive_basename_fallback: true
       resolver: direct
+      # Fail fast if a legacy JSON still uses original folders or one generic
+      # `trash` category instead of the canonical project labels.
+      require_category_names_in_data_classes: true
       unknown_category: error
       allow_bbox_fallback: false
+      # Some RealWaste annotations contain a four-corner bounding box stored as
+      # `segmentation`. Remove the entire contaminated image, even when it also
+      # has another annotation, so training sees genuine masks only.
+      drop_images_with_box_polygons: true
+      box_polygon_tolerance_pixels: 1.0
 
 model:
   task: segment
