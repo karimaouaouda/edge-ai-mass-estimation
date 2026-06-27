@@ -299,6 +299,11 @@ class YOLOTrainer:
         reports: dict[str, Any] = {}
         artifact_reports: dict[str, Any] = {}
         evaluation_root = self.artifacts_dir / "evaluation"
+        
+        
+        batch = evaluation.get("batch", self.config.payload["training"].get("batch", 16))
+        
+        print(f"batch size will be used : ", batch)
         with tracker.run(), torch.no_grad():
             model.eval()
             
