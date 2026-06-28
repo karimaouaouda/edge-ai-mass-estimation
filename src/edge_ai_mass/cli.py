@@ -110,6 +110,57 @@ def main(argv: list[str] | None = None) -> None:
         help="Run native stages directly (diagnostic fallback; ZenML is the default)",
     )
 
+    p_mass = sub.add_parser("mass", help="Run the mass-estimation MLOps pipeline")
+    mass_sub = p_mass.add_subparsers(dest="mass_command")
+
+    def add_mass_common(command_parser: argparse.ArgumentParser) -> None:
+        command_parser.add_argument(
+            "--config",
+            default="configs/mass_estimation/residual_pipeline.yaml",
+            help="Mass-estimation pipeline YAML configuration",
+        )
+        command_parser.add_argument(
+            "--set",
+            dest="overrides",
+            action="append",
+            default=[],
+            metavar="KEY=VALUE",
+            help="Override YAML with dotted.path=value (repeatable)",
+        )
+        command_parser.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="Validate and print the execution plan without writing artifacts",
+        )
+        command_parser.add_argument(
+            "--force",
+            action="store_true",
+            help="Permit changed config under the same mass-estimation run name",
+        )
+        command_parser.add_argument(
+            "--no-zenml",
+            action="store_true",
+            help="Run native stages directly instead of ZenML",
+        )
+
+    add_mass_common(mass_sub.add_parser("preprocess", help="Validate measured object data"))
+    add_mass_common(
+        mass_sub.add_parser(
+            "build-features",
+            help="Build feature schema and train/validation/test feature splits",
+        )
+    )
+    add_mass_common(mass_sub.add_parser("train", help="Train residual mass model candidates"))
+    add_mass_common(mass_sub.add_parser("evaluate", help="Evaluate baseline and hybrid mass models"))
+    add_mass_common(mass_sub.add_parser("register", help="Register the best mass model in MLflow"))
+    p_mass_run = mass_sub.add_parser("run-pipeline", help="Run selected or all mass stages")
+    add_mass_common(p_mass_run)
+    p_mass_run.add_argument(
+        "--stage",
+        default="all",
+        help="all/mass, or comma-separated preprocess,features,split,train,evaluate,register",
+    )
+
     args = parser.parse_args(argv)
     setup_logging(args.log_level)
 
@@ -127,6 +178,8 @@ def main(argv: list[str] | None = None) -> None:
         _cmd_agent(args)
     elif args.command == "train":
         _cmd_train(args)
+    elif args.command == "mass":
+        _cmd_mass(args)
     else:
         parser.print_help()
         sys.exit(1)
@@ -307,6 +360,31 @@ def _cmd_train(args: argparse.Namespace) -> None:
             skip_optuna=args.skip_optuna,
             force=args.force,
         )
+    print(json.dumps(result, indent=2, default=str))
+
+
+def _cmd_mass(args: argparse.Namespace) -> None:
+    from edge_ai_mass.mass_estimation import MassEstimationPipeline
+
+    stage_by_command = {
+        "preprocess": "preprocess",
+        "build-features": "features,split",
+        "train": "train",
+        "evaluate": "evaluate",
+        "register": "register",
+        "run-pipeline": args.stage if hasattr(args, "stage") else "all",
+    }
+    if not args.mass_command:
+        raise SystemExit("Choose a mass subcommand: preprocess, build-features, train, evaluate, register, run-pipeline")
+    overrides = list(args.overrides)
+    if args.no_zenml:
+        overrides.append("orchestration.zenml.enabled=false")
+    pipeline = MassEstimationPipeline.from_config(args.config, overrides=overrides)
+    stage = stage_by_command[args.mass_command]
+    if args.dry_run:
+        result = pipeline.plan(stage)
+    else:
+        result = pipeline.run(stage, force=args.force)
     print(json.dumps(result, indent=2, default=str))
 
 

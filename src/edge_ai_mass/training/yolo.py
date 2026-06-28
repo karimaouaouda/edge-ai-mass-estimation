@@ -311,7 +311,7 @@ class YOLOTrainer:
         batch = evaluation.get("batch", self.config.payload["training"].get("batch", 16))
         
         print("train on cuda device : ", self.config.payload["training"].get("device", 0))
-        
+        batch = 1
         print(f"train on batch {batch if batch is not None else 'auto'}")
         with tracker.run(), torch.no_grad():
             model.eval()
@@ -338,6 +338,7 @@ class YOLOTrainer:
                     project=str(evaluation_root),
                     name=str(split),
                     exist_ok=True,
+                    workers=int(evaluation.get("workers", 0)),
                 )
                 reports[str(split)] = normalize_metrics(metrics)
                 tracker.log_metrics(reports[str(split)], prefix=f"{split}_")

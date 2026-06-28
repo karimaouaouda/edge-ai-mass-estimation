@@ -66,17 +66,17 @@ edge-ai-mass train --stage export \
     --set export.enabled=true \
     --set 'export.formats=[onnx, engine]'
 
-# Collect features for mass regression
-python scripts/collect_mass_features.py \
-    --images data/raw/mass_dataset/ \
-    --labels data/raw/mass_labels.csv \
-    --output data/splits/mass_features.csv
+# Inspect and run the governed residual mass-estimation pipeline
+edge-ai-mass mass run-pipeline \
+    --config configs/mass_estimation/residual_pipeline.yaml \
+    --dry-run
 
-# Train mass regression head
-python scripts/train_mass_regression.py --config configs/models/mass_regression_training.yaml
+edge-ai-mass mass run-pipeline \
+    --config configs/mass_estimation/residual_pipeline.yaml \
+    --set data.measurements=data/raw/mass_measurements.csv
 ```
 
-The YOLO pipeline uses DVC for data lineage, Optuna for persistent hyperparameter studies, and MLflow for experiment tracking and model registration. See `docs/training_pipeline.md`, `docs/kaggle_training_guide.md`, and `notebooks/yolo_training_pipeline.ipynb`.
+The YOLO pipeline uses DVC for data lineage, Optuna for persistent hyperparameter studies, and MLflow for experiment tracking and model registration. The mass-estimation pipeline mirrors the same governed style for object-level residual regression. See `docs/training_pipeline.md`, `docs/mass_estimation_pipeline.md`, `docs/kaggle_training_guide.md`, and `notebooks/yolo_training_pipeline.ipynb`.
 
 ZenML orders and records the complete DAG, including a final `publish` step
 that creates or versions a private Kaggle dataset containing reusable

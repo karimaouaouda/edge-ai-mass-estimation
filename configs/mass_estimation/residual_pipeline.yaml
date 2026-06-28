@@ -1,0 +1,161 @@
+# Governed residual mass-estimation pipeline.
+# The model learns a correction to a physics estimate:
+#   mass_base_g = estimated_volume_m3 * effective_density_kg_m3 * 1000
+#   residual_g = real_mass_g - mass_base_g
+#   predicted_mass_g = mass_base_g + predicted_residual_g
+
+project:
+  name: edge-ai-mass-estimation
+  root: .
+  pipeline: mass_estimation
+  model_stage: mass
+
+orchestration:
+  zenml:
+    enabled: true
+    pipeline_name: edge_ai_mass_mass_estimation
+
+data:
+  # CSV, JSON/JSONL, or Parquet object-level measurements. Required canonical
+  # fields after column mapping are sample_id, class_name, and real_mass_g.
+  measurements: ${MASS_MEASUREMENTS:data/raw/mass_measurements.csv}
+  output_dir: ${MASS_DATASET_OUTPUT:data/processed/mass_estimation}
+  columns:
+    sample_id: sample_id
+    object_id: object_id
+    class_name: class_name
+    real_mass_g: real_mass_g
+    material: material
+    volume: estimated_volume_m3
+    volume_unit: m3
+    density: effective_density_kg_m3
+  material:
+    default_material: other
+    class_to_material:
+      organic_waste: organic
+      plastic_bottle: plastic
+      plastic_bag: plastic
+      rigid_plastic: plastic
+      metal_can: metal
+      glass: glass
+      paper_cardboard: cardboard
+      mixed_waste: other
+    density_priors_kg_m3:
+      plastic: 40.0
+      glass: 300.0
+      metal: 160.0
+      paper: 90.0
+      cardboard: 60.0
+      organic: 500.0
+      textile: 120.0
+      wood: 250.0
+      other: 100.0
+  optional_inputs:
+    detections: ${MASS_DETECTIONS:}
+    masks: ${MASS_MASKS:}
+    depth_features: ${MASS_DEPTH_FEATURES:}
+    calibration: ${MASS_CALIBRATION:}
+
+features:
+  output_format: csv
+  require_mass_base: true
+  mass_base_column: mass_base_g
+  categorical_columns:
+    - class_name
+    - material
+  numeric_columns:
+    - estimated_volume_m3
+    - effective_density_kg_m3
+    - mass_base_g
+    - bbox_width_px
+    - bbox_height_px
+    - bbox_area_px
+    - mask_area_px
+    - projected_area_m2
+    - aspect_ratio
+    - solidity
+    - extent
+    - compactness
+    - depth_mean_m
+    - depth_median_m
+    - depth_std_m
+    - depth_min_m
+    - depth_max_m
+    - estimated_thickness_m
+    - depth_valid_ratio
+    - detection_confidence
+    - mask_confidence
+  auto_include_numeric: true
+  strict_columns: false
+  exclude_columns:
+    - real_mass_g
+    - measured_mass_g
+    - correction_g
+    - residual_g
+    - residual_target_g
+
+split:
+  train: 0.70
+  val: 0.15
+  test: 0.15
+  seed: 42
+  group_column: object_id
+  stratify_column: class_name
+  unsafe_random_fallback: false
+
+model:
+  target: residual_g
+  candidates:
+    - name: physics_baseline
+      type: physics_only
+      enabled: true
+      params: {}
+    - name: huber_residual
+      type: huber
+      enabled: true
+      params:
+        epsilon: 1.35
+        alpha: 0.0001
+        max_iter: 1000
+    - name: ridge_residual
+      type: ridge
+      enabled: true
+      params:
+        alpha: 1.0
+    - name: random_forest_residual
+      type: random_forest
+      enabled: true
+      params:
+        n_estimators: 200
+        max_depth: 6
+        min_samples_leaf: 3
+        n_jobs: -1
+
+training:
+  run_name: mass-residual-regression
+  artifacts_dir: ${MASS_ARTIFACTS:artifacts/mass_estimation}
+  seed: 42
+  selection:
+    split: val
+    metric: hybrid.mae_g
+    mode: minimize
+
+evaluation:
+  splits: [val, test]
+  small_mass_epsilon_g: 1.0
+  plots: true
+
+tracking:
+  enabled: true
+  uri: ${MLFLOW_TRACKING_URI:sqlite:///artifacts/mlflow/mlflow.db}
+  registry_uri: ${MLFLOW_REGISTRY_URI:sqlite:///artifacts/mlflow/mlflow.db}
+  experiment: ${MLFLOW_EXPERIMENT_NAME:edge-ai-mass-residual-mass}
+  tags:
+    target_device: jetson_nano
+    owner: mlops
+    thesis_stage: mass_estimation
+  registry:
+    enabled: true
+    name: edge-ai-mass-residual-mass
+    alias: candidate
+    artifact_path: model
