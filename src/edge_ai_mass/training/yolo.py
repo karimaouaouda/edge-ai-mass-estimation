@@ -307,12 +307,9 @@ class YOLOTrainer:
         artifact_reports: dict[str, Any] = {}
         evaluation_root = self.artifacts_dir / "evaluation"
         gc.collect()
-        torch.cuda.empty_cache()
-        batch = evaluation.get("batch", self.config.payload["training"].get("batch", 16))
-        
-        print("train on cuda device : ", self.config.payload["training"].get("device", 0))
+        torch.cuda.empty_cache()        
         batch = 1
-        print(f"train on batch {batch if batch is not None else 'auto'}")
+        print(f"train on batch {batch if batch is not None else 'auto'} with workers {evaluation.get('workers', 0)}")
         with tracker.run(), torch.no_grad():
             model.eval()
             
