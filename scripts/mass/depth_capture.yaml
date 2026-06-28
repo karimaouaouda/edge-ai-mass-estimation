@@ -1,0 +1,32 @@
+# Config-first camera depth-metrics collection.
+# Select the model by changing active_profile or by passing --profile.
+
+active_profile: depth_anything
+pipeline_config: configs/pipeline/default.yaml
+camera: 0
+frames: 1
+interval_seconds: 0.0
+output: data/raw/depth_metrics/camera_depth_metrics.csv
+save_depth_dir: data/raw/depth_metrics/maps
+preview_dir: data/raw/depth_metrics/previews
+preview_source: metric
+display: false
+log_level: INFO
+
+profiles:
+  # Uses stages.depth.primary from pipeline_config.
+  depth_anything:
+    depth_source: primary
+    preview_source: metric
+
+  # Uses stages.depth.fallback from pipeline_config.
+  midas:
+    depth_source: fallback
+    preview_source: raw
+
+  # Longer collection profile for camera stability experiments.
+  calibration_run:
+    depth_source: primary
+    frames: 30
+    interval_seconds: 0.2
+    output: data/raw/depth_metrics/calibration_depth_metrics.csv

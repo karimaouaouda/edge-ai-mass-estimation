@@ -330,12 +330,13 @@ class YOLOTrainer:
                     device="0",
                     conf=float(evaluation.get("conf", 0.001)),
                     iou=float(evaluation.get("iou", 0.7)),
-                    plots=bool(evaluation.get("plots", True)),
+                    plots=bool(evaluation.get("plots", False)),
                     save_json=bool(evaluation.get("save_json", True)),
                     project=str(evaluation_root),
                     name=str(split),
                     exist_ok=True,
                     workers=int(evaluation.get("workers", 0)),
+                    max_det=int(evaluation.get("max_det", 3)),
                 )
                 reports[str(split)] = normalize_metrics(metrics)
                 tracker.log_metrics(reports[str(split)], prefix=f"{split}_")

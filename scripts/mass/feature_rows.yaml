@@ -1,0 +1,55 @@
+# Config-first object feature-row creation for the residual mass pipeline.
+# Change active_profile to switch between one row and a batch without editing
+# command-line arguments.
+
+active_profile: single_example
+output: data/raw/mass_measurements.csv
+
+defaults:
+  pixel_per_cm: 12.5
+  background_default_depth: 92.0
+  camera_height: 100.0
+  depth_unit: cm
+  thickness_mode: camera_minus_background
+  min_thickness_cm: 0.0
+
+# Priors are in g/cm3 because the collection equation computes:
+#   base_mass_g = volume_cm3 * density_prior_g_cm3
+class_density_priors_g_cm3:
+  organic_waste: 0.50
+  plastic_bottle: 0.04
+  plastic_bag: 0.03
+  rigid_plastic: 0.08
+  metal_can: 0.16
+  glass: 0.30
+  paper_cardboard: 0.06
+  mixed_waste: 0.10
+
+profiles:
+  single_example:
+    row:
+      image_id: img_0001
+      object_id: object_0001
+      sample_id: img_0001_object_0001
+      class_name: plastic_bottle
+      material: plastic
+      mask: data/raw/masks/img_0001_object_0001.png
+      real_mass_g: 18.5
+
+  batch_example:
+    output: data/raw/mass_measurements_batch.csv
+    rows:
+      - image_id: img_0001
+        object_id: object_0001
+        sample_id: img_0001_object_0001
+        class_name: plastic_bottle
+        material: plastic
+        mask: data/raw/masks/img_0001_object_0001.png
+        real_mass_g: 18.5
+      - image_id: img_0002
+        object_id: object_0002
+        sample_id: img_0002_object_0002
+        class_name: metal_can
+        material: metal
+        mask: data/raw/masks/img_0002_object_0002.png
+        real_mass_g: 14.2
