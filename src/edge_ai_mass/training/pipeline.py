@@ -62,6 +62,14 @@ class TrainingPipeline:
             required_packages.update({"ultralytics", "mlflow"})
         if "tune" in stages:
             required_packages.add("optuna")
+        evaluation = self.config.payload.get("evaluation", {})
+        pre_export = evaluation.get("pre_export", {})
+        if (
+            "evaluate" in stages
+            and pre_export.get("enabled", False)
+            and pre_export.get("format", "engine") == "engine"
+        ):
+            required_packages.add("tensorrt")
         if "export" in stages and self.config.payload.get("export", {}).get("enabled", False):
             export_formats = set(self.config.payload["export"].get("formats", []))
             if "onnx" in export_formats:

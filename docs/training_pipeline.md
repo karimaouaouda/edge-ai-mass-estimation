@@ -251,6 +251,36 @@ The final best-parameter training run enables Ultralytics plots. Its loss/metric
 
 Evaluation reloads `models/best.pt`, never `last.pt`. For each configured split it saves quantitative metrics, PR/F1/confusion curves, COCO JSON when supported, and deterministic annotated predictions sampled from the actual split. Everything is logged to MLflow and referenced from `reports/evaluation.json`.
 
+Evaluation can run in FP16 to reduce model-parameter memory. The config below
+casts the loaded PyTorch model to half precision before validation, passes
+`half=true` into Ultralytics validation/prediction, and records parameter bytes
+before and after casting in `reports/evaluation.json` plus
+`evaluation/precision.json` in MLflow.
+
+```yaml
+evaluation:
+  precision: fp16
+  cast_model_to_half: true
+  workers: 0
+```
+
+Set `evaluation.precision=fp32` when you need a strict FP32 comparison or when
+running CPU-only validation.
+
+When a TensorRT-compatible environment is available, evaluation can also
+pre-export a 16-bit TensorRT engine before validation:
+
+```bash
+edge-ai-mass train --stage evaluate \
+  --config configs/training/yolo_segmentation.yaml \
+  --set evaluation.pre_export.enabled=true \
+  --set evaluation.pre_export.use_for_evaluation=true
+```
+
+That pre-export uses `half=true` and `int8=false` by default, so the artifact
+metadata records `quantization_bits: 16`. It is disabled by default because
+TensorRT engine builds are tied to the CUDA/TensorRT runtime.
+
 ## Best-model export
 
 Export is an explicit stage and always uses `models/best.pt`. Enable it and choose one or multiple formats in YAML, or override them from the CLI:

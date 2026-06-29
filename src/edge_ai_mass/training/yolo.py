@@ -298,48 +298,45 @@ class YOLOTrainer:
         self.state.require("best_weights")
         YOLO = _require_yolo()
         evaluation = self.config.payload.get("evaluation", {})
-        model = YOLO(
-            str(self.state.data["best_weights"]),
-            task=self.config.payload["model"]["task"],
-        )
         tracker = MLflowSession(self.config, self.state)
         reports: dict[str, Any] = {}
         artifact_reports: dict[str, Any] = {}
         evaluation_root = self.artifacts_dir / "evaluation"
-        gc.collect()
-        torch.cuda.empty_cache()        
-        batch = 1
-        print(f"train on batch {batch if batch is not None else 'auto'} with workers {evaluation.get('workers', 0)}")
-        print(f"reduced to fp16")
+        source_best_weights = Path(self.state.data["best_weights"]).resolve()
+        precision = self._evaluation_precision_config(evaluation)
+        _release_accelerator_memory()
+
         with tracker.run(), torch.no_grad():
+            pre_export = self._prepare_evaluation_pre_export(
+                YOLO,
+                source_best_weights=source_best_weights,
+                evaluation=evaluation,
+                tracker=tracker,
+            )
+            evaluation_weights = Path(
+                pre_export.get("evaluation_weights") or source_best_weights
+            ).resolve()
+            model = YOLO(str(evaluation_weights), task=self.config.payload["model"]["task"])
+            precision_report = self._prepare_evaluation_precision(
+                model,
+                precision=precision,
+            )
             model.eval()
-            
+            tracker.mlflow.log_dict(precision_report, "evaluation/precision.json")
+            tracker.mlflow.log_dict(pre_export, "evaluation/pre_export.json")
+
             for split in evaluation.get("splits", ["val", "test"]):
                 split_dir = evaluation_root / str(split)
                 if split_dir.exists():
                     shutil.rmtree(split_dir)
-                    
-                metrics = model.val(
-                    data=str(self.config.dataset_dir / "dataset.yaml"),
+
+                validation_args = self._evaluation_validation_args(
+                    evaluation,
                     split=str(split),
-                    imgsz=int(
-                        evaluation.get(
-                            "imgsz", self.config.payload["training"].get("imgsz", 640)
-                        )
-                    ),
-                    batch=batch,
-                    device="0",
-                    conf=float(evaluation.get("conf", 0.001)),
-                    iou=float(evaluation.get("iou", 0.7)),
-                    plots=bool(evaluation.get("plots", False)),
-                    save_json=bool(evaluation.get("save_json", True)),
-                    project=str(evaluation_root),
-                    name=str(split),
-                    exist_ok=True,
-                    workers=int(evaluation.get("workers", 0)),
-                    max_det=int(evaluation.get("max_det", 3)),
-                    half=True
+                    precision=precision,
+                    output_root=evaluation_root,
                 )
+                metrics = model.val(**validation_args)
                 reports[str(split)] = normalize_metrics(metrics)
                 tracker.log_metrics(reports[str(split)], prefix=f"{split}_")
                 actual_split_dir = Path(getattr(metrics, "save_dir", split_dir))
@@ -371,7 +368,10 @@ class YOLOTrainer:
 
             self._enforce_metric_gates(reports, evaluation.get("quality_gates", {}))
             report = {
-                "weights": str(self.state.data["best_weights"]),
+                "weights": str(source_best_weights),
+                "evaluation_weights": str(evaluation_weights),
+                "precision": precision_report,
+                "pre_export": pre_export,
                 "dataset_fingerprint": self._dataset_manifest()["dataset_fingerprint"],
                 "splits": reports,
                 "artifacts": artifact_reports,
@@ -380,8 +380,12 @@ class YOLOTrainer:
             }
             report_path = self._write_json("reports/evaluation.json", report)
             tracker.mlflow.log_artifact(str(report_path), artifact_path="reports")
-        self.state.update("evaluate", evaluation=report, evaluation_report=str(report_path))
-        del model
+            del model
+        self.state.update(
+            "evaluate",
+            evaluation=report,
+            evaluation_report=str(report_path),
+        )
         _release_accelerator_memory()
         return report
 
@@ -646,6 +650,205 @@ class YOLOTrainer:
             ),
         }
 
+    def _evaluation_precision_config(self, evaluation: dict[str, Any]) -> dict[str, Any]:
+        """Resolve evaluation precision settings with backward-compatible aliases."""
+        requested_precision = evaluation.get("precision")
+        if requested_precision is None:
+            precision = "fp16" if bool(evaluation.get("half", False)) else "fp32"
+        else:
+            precision = str(requested_precision).lower().strip()
+        half = precision == "fp16"
+        return {
+            "precision": precision,
+            "half": half,
+            "cast_model_to_half": bool(evaluation.get("cast_model_to_half", half)),
+        }
+
+    def _evaluation_validation_args(
+        self,
+        evaluation: dict[str, Any],
+        *,
+        split: str,
+        precision: dict[str, Any],
+        output_root: Path,
+    ) -> dict[str, Any]:
+        """Build Ultralytics validation args from config without hidden constants."""
+        args: dict[str, Any] = {
+            "data": str(self.config.dataset_dir / "dataset.yaml"),
+            "split": split,
+            "imgsz": int(
+                evaluation.get(
+                    "imgsz", self.config.payload["training"].get("imgsz", 640)
+                )
+            ),
+            "batch": evaluation.get(
+                "batch", self.config.payload["training"].get("batch", 16)
+            ),
+            "device": evaluation.get(
+                "device", self.config.payload["training"].get("device", 0)
+            ),
+            "conf": float(evaluation.get("conf", 0.001)),
+            "iou": float(evaluation.get("iou", 0.7)),
+            "plots": bool(evaluation.get("plots", False)),
+            "save_json": bool(evaluation.get("save_json", True)),
+            "project": str(output_root),
+            "name": split,
+            "exist_ok": True,
+            "workers": int(evaluation.get("workers", 0)),
+            "half": bool(precision["half"]),
+        }
+        if evaluation.get("max_det") is not None:
+            args["max_det"] = int(evaluation["max_det"])
+        return args
+
+    def _prepare_evaluation_precision(
+        self,
+        model: Any,
+        *,
+        precision: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Optionally cast YOLO's torch module to FP16 and report memory impact."""
+        report = {
+            **precision,
+            "parameter_footprint_before": None,
+            "parameter_footprint_after": None,
+            "cast_status": "not_requested",
+        }
+        module = getattr(model, "model", None)
+        if not precision["half"]:
+            report["cast_status"] = "fp32_requested"
+            return report
+        if not precision["cast_model_to_half"]:
+            report["cast_status"] = "half_validation_only"
+            return report
+        if module is None or not callable(getattr(module, "half", None)):
+            report["cast_status"] = "skipped_no_torch_module"
+            return report
+
+        report["parameter_footprint_before"] = _parameter_footprint(module)
+        module.half()
+        report["parameter_footprint_after"] = _parameter_footprint(module)
+        report["cast_status"] = "converted_to_fp16"
+        before = report["parameter_footprint_before"] or {}
+        after = report["parameter_footprint_after"] or {}
+        if before.get("bytes") and after.get("bytes"):
+            report["parameter_bytes_reduction_fraction"] = 1 - (
+                after["bytes"] / before["bytes"]
+            )
+        logger.info(
+            "Evaluation precision=%s half=%s cast_status=%s",
+            report["precision"],
+            report["half"],
+            report["cast_status"],
+        )
+        return report
+
+    def _prepare_evaluation_pre_export(
+        self,
+        YOLO: Any,
+        *,
+        source_best_weights: Path,
+        evaluation: dict[str, Any],
+        tracker: MLflowSession,
+    ) -> dict[str, Any]:
+        """Optionally export an FP16 TensorRT engine before evaluation.
+
+        This is disabled by default because TensorRT engine export is
+        environment-specific. When enabled, it uses ``half=True`` and
+        ``int8=False`` by default, which is the FP16/16-bit quantization path.
+        """
+        pre_export = evaluation.get("pre_export", {})
+        if not pre_export or not pre_export.get("enabled", False):
+            return {
+                "enabled": False,
+                "evaluation_weights": None,
+                "reason": "evaluation.pre_export.enabled is false",
+            }
+
+        export_format = str(pre_export.get("format", "engine"))
+        options = dict(pre_export.get("options", {}))
+        options.setdefault("half", True)
+        options.setdefault("int8", False)
+        options.setdefault(
+            "imgsz",
+            int(
+                evaluation.get(
+                    "imgsz", self.config.payload["training"].get("imgsz", 640)
+                )
+            ),
+        )
+        options.setdefault("batch", evaluation.get("batch", 1))
+        options.setdefault(
+            "device",
+            evaluation.get("device", self.config.payload["training"].get("device", 0)),
+        )
+        if options.get("int8") and "data" not in options:
+            options["data"] = str(self.config.dataset_dir / "dataset.yaml")
+
+        destination_dir = self.artifacts_dir / "evaluation" / "pre_export" / export_format
+        if destination_dir.exists():
+            shutil.rmtree(destination_dir)
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        continue_on_error = bool(pre_export.get("continue_on_error", False))
+        engine_model = YOLO(str(source_best_weights), task=self.config.payload["model"]["task"])
+
+        try:
+            exported_value = engine_model.export(format=export_format, **options)
+            exported_paths = _normalize_export_paths(exported_value)
+            organized_paths = [
+                _organize_export(path, destination_dir, source_best_weights)
+                for path in exported_paths
+            ]
+            selected = next(
+                (path for path in organized_paths if path.suffix == f".{export_format}"),
+                organized_paths[0] if organized_paths else None,
+            )
+            result = {
+                "enabled": True,
+                "format": export_format,
+                "status": "complete",
+                "quantization_bits": _quantization_bits(options),
+                "options": options,
+                "use_for_evaluation": bool(pre_export.get("use_for_evaluation", False)),
+                "evaluation_weights": (
+                    str(selected)
+                    if selected is not None and pre_export.get("use_for_evaluation", False)
+                    else None
+                ),
+                "artifacts": [
+                    {
+                        "path": str(path),
+                        "sha256": _path_digest(path),
+                        "size_bytes": _path_size(path),
+                    }
+                    for path in organized_paths
+                ],
+            }
+            tracker.mlflow.log_artifacts(
+                str(destination_dir),
+                artifact_path=f"evaluation/pre_export/{export_format}",
+            )
+            return result
+        except Exception as exc:
+            result = {
+                "enabled": True,
+                "format": export_format,
+                "status": "failed",
+                "quantization_bits": _quantization_bits(options),
+                "options": options,
+                "evaluation_weights": None,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            if continue_on_error:
+                logger.warning("Evaluation pre-export failed and will be skipped: %s", exc)
+                return result
+            raise RuntimeError(
+                f"Failed to pre-export evaluation model as '{export_format}': {exc}"
+            ) from exc
+        finally:
+            del engine_model
+            _release_accelerator_memory()
+
     def _log_dataset_visualizations(self, tracker: MLflowSession) -> dict[str, Any]:
         report = create_dataset_visualizations(self.config)
         output_dir = self.artifacts_dir / "dataset_visualizations"
@@ -689,6 +892,7 @@ class YOLOTrainer:
         split_dir: Path,
         evaluation: dict[str, Any],
     ) -> list[str]:
+        precision = self._evaluation_precision_config(evaluation)
         sample_count = int(evaluation.get("annotated_samples", 12))
         if sample_count <= 0:
             return []
@@ -716,6 +920,7 @@ class YOLOTrainer:
                 device=evaluation.get(
                     "device", self.config.payload["training"].get("device", 0)
                 ),
+                half=bool(precision["half"]),
                 verbose=False,
             )[0]
             plotted_bgr = prediction.plot()
@@ -924,6 +1129,37 @@ def _suggest(trial: Any, name: str, specification: dict[str, Any]) -> Any:
     if kind == "categorical":
         return trial.suggest_categorical(name, specification["choices"])
     raise ValueError(f"Unsupported Optuna parameter type '{kind}' for '{name}'")
+
+
+def _parameter_footprint(module: Any) -> dict[str, Any] | None:
+    """Return parameter count, byte size, and dtype breakdown for a torch module."""
+    parameters_fn = getattr(module, "parameters", None)
+    if not callable(parameters_fn):
+        return None
+    total_parameters = 0
+    total_bytes = 0
+    dtype_counts: dict[str, int] = {}
+    for parameter in parameters_fn():
+        count = int(parameter.numel())
+        total_parameters += count
+        total_bytes += count * int(parameter.element_size())
+        dtype_name = str(getattr(parameter, "dtype", "unknown"))
+        dtype_counts[dtype_name] = dtype_counts.get(dtype_name, 0) + count
+    return {
+        "parameters": total_parameters,
+        "bytes": total_bytes,
+        "megabytes": round(total_bytes / (1024**2), 4),
+        "dtypes": dtype_counts,
+    }
+
+
+def _quantization_bits(options: dict[str, Any]) -> int:
+    """Describe export precision in bits for artifact metadata."""
+    if options.get("int8"):
+        return 8
+    if options.get("half"):
+        return 16
+    return 32
 
 
 def _read_optional_json(path: Path) -> dict[str, Any] | None:

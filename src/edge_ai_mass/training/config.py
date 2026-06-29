@@ -185,6 +185,27 @@ class TrainingConfig:
                     "tuning.enforce_complete_space=false only for an intentional fixed ablation."
                 )
 
+        evaluation = self.payload.get("evaluation", {})
+        if not isinstance(evaluation, dict):
+            raise TrainingConfigError("evaluation must be a mapping")
+        precision = str(evaluation.get("precision", "fp32")).lower()
+        if precision not in {"fp32", "fp16"}:
+            raise TrainingConfigError("evaluation.precision must be either 'fp32' or 'fp16'")
+        pre_export = evaluation.get("pre_export", {})
+        if not isinstance(pre_export, dict):
+            raise TrainingConfigError("evaluation.pre_export must be a mapping")
+        if pre_export.get("enabled", False):
+            pre_export_format = str(pre_export.get("format", "engine"))
+            if pre_export_format != "engine":
+                raise TrainingConfigError(
+                    "evaluation.pre_export.format currently supports only 'engine'"
+                )
+            pre_export_options = pre_export.get("options", {})
+            if not isinstance(pre_export_options, dict):
+                raise TrainingConfigError(
+                    "evaluation.pre_export.options must be a mapping"
+                )
+
         export = self.payload.get("export", {})
         if export.get("enabled", False):
             formats = export.get("formats", [])

@@ -290,6 +290,30 @@ results = pipeline.run("tune,train,evaluate,export,register")
 print(json.dumps(results, indent=2, default=str)[:20000])
 ```
 
+Evaluation is configured for FP16 by default to reduce VRAM during validation:
+
+```python
+OVERRIDES += [
+    "evaluation.precision=fp16",
+    "evaluation.cast_model_to_half=true",
+    "evaluation.workers=0",
+]
+```
+
+If the Kaggle image has a compatible TensorRT stack, you can also build a
+16-bit TensorRT engine before evaluation and validate through that engine:
+
+```python
+OVERRIDES += [
+    "evaluation.pre_export.enabled=true",
+    "evaluation.pre_export.use_for_evaluation=true",
+]
+```
+
+Keep this disabled when TensorRT is unavailable; regular FP16 PyTorch
+evaluation still uses the best checkpoint and records the parameter-memory
+reduction in the evaluation report.
+
 Export is disabled by default. Select one format:
 
 ```python

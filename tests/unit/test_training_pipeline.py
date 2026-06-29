@@ -271,6 +271,30 @@ def test_plan_and_stage_aliases_do_not_start_training(tmp_path: Path):
     assert plan["checkpoint"] == "any-checkpoint.pt"
 
 
+def test_plan_checks_tensorrt_for_evaluation_engine_pre_export(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import edge_ai_mass.training.pipeline as pipeline_module
+
+    config = _config(tmp_path)
+    config.payload["evaluation"] = {
+        "pre_export": {"enabled": True, "format": "engine"}
+    }
+    original_find_spec = pipeline_module.importlib.util.find_spec
+
+    def fake_find_spec(name: str):
+        if name == "tensorrt":
+            return None
+        return original_find_spec(name)
+
+    monkeypatch.setattr(pipeline_module.importlib.util, "find_spec", fake_find_spec)
+
+    plan = TrainingPipeline(config).plan("evaluate")
+
+    assert "missing Python package: tensorrt" in plan["blocking_issues"]
+
+
 def test_metric_normalization_exposes_stable_names():
     metrics = {"metrics/mAP50-95(M)": 0.42, "metrics/mAP50(B)": 0.71}
     normalized = normalize_metrics(metrics)
@@ -313,6 +337,110 @@ def test_export_artifacts_are_moved_beside_format_manifest(tmp_path: Path):
     assert organized.is_file()
     assert not exported.exists()
     assert _path_digest(organized) == _path_digest(destination / "best.onnx")
+
+
+def test_evaluation_precision_casts_model_parameters_to_fp16(tmp_path: Path):
+    import torch
+
+    config = _config(tmp_path)
+    trainer = YOLOTrainer(config, PipelineState(config.artifacts_dir / "state.json"))
+    module = torch.nn.Linear(4, 2)
+    model = SimpleNamespace(model=module)
+    precision = trainer._evaluation_precision_config(
+        {"precision": "fp16", "cast_model_to_half": True}
+    )
+
+    report = trainer._prepare_evaluation_precision(model, precision=precision)
+
+    assert report["precision"] == "fp16"
+    assert report["half"] is True
+    assert report["cast_status"] == "converted_to_fp16"
+    assert report["parameter_footprint_after"]["bytes"] == (
+        report["parameter_footprint_before"]["bytes"] // 2
+    )
+    assert {parameter.dtype for parameter in module.parameters()} == {torch.float16}
+
+
+def test_evaluation_validation_args_pass_half_precision_without_hidden_device(
+    tmp_path: Path,
+):
+    config = _config(tmp_path)
+    config.payload["evaluation"] = {
+        "precision": "fp16",
+        "batch": 2,
+        "device": 0,
+        "workers": 0,
+    }
+    trainer = YOLOTrainer(config, PipelineState(config.artifacts_dir / "state.json"))
+    precision = trainer._evaluation_precision_config(config.payload["evaluation"])
+
+    args = trainer._evaluation_validation_args(
+        config.payload["evaluation"],
+        split="val",
+        precision=precision,
+        output_root=config.artifacts_dir / "evaluation",
+    )
+
+    assert args["half"] is True
+    assert args["batch"] == 2
+    assert args["device"] == 0
+    assert args["workers"] == 0
+
+
+def test_evaluation_can_pre_export_fp16_engine_for_validation(tmp_path: Path):
+    config = _config(tmp_path)
+    trainer = YOLOTrainer(config, PipelineState(config.artifacts_dir / "state.json"))
+    best = tmp_path / "best.pt"
+    best.write_bytes(b"best")
+
+    class FakeYOLO:
+        calls: list[dict] = []
+
+        def __init__(self, weights: str, *, task: str):
+            self.weights = weights
+            self.task = task
+
+        def export(self, *, format: str, **options):
+            self.calls.append({"format": format, "options": options})
+            exported = tmp_path / f"best.{format}"
+            exported.write_bytes(b"engine")
+            return str(exported)
+
+    tracker = SimpleNamespace(
+        mlflow=SimpleNamespace(log_artifacts=lambda *args, **kwargs: None)
+    )
+    report = trainer._prepare_evaluation_pre_export(
+        FakeYOLO,
+        source_best_weights=best,
+        evaluation={
+            "imgsz": 320,
+            "batch": 1,
+            "device": 0,
+            "pre_export": {
+                "enabled": True,
+                "format": "engine",
+                "use_for_evaluation": True,
+                "options": {"half": True, "int8": False},
+            },
+        },
+        tracker=tracker,
+    )
+
+    assert report["status"] == "complete"
+    assert report["quantization_bits"] == 16
+    assert report["evaluation_weights"].endswith(".engine")
+    assert Path(report["evaluation_weights"]).is_file()
+    assert FakeYOLO.calls[0]["format"] == "engine"
+    assert FakeYOLO.calls[0]["options"]["half"] is True
+    assert FakeYOLO.calls[0]["options"]["int8"] is False
+
+
+def test_evaluation_precision_must_be_fp32_or_fp16(tmp_path: Path):
+    payload = _config(tmp_path).payload
+    payload["evaluation"] = {"precision": "bf16"}
+
+    with pytest.raises(TrainingConfigError, match="evaluation.precision"):
+        TrainingConfig(payload, tmp_path / "config.yaml")
 
 
 def test_default_optuna_space_covers_training_loss_and_augmentation_groups():
