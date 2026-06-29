@@ -123,7 +123,7 @@ training:
     interval_epochs: 5
     save_final: true
     # Keep only the newest N checkpoint directories. Use 0 for unlimited.
-    keep_last: 10
+    keep_last: 5
     resume:
       # auto: resume checkpoints/latest.json when present, otherwise use the
       # model.checkpoint below. never: always start from model.checkpoint.
@@ -131,10 +131,15 @@ training:
       mode: auto
       # An explicit local/mounted checkpoint overrides automatic discovery.
       checkpoint: ${TRAINING_RESUME_CHECKPOINT:}
+      # Resume from a managed checkpoint directory by completed epoch number.
+      # Example: 55 loads checkpoints/epoch_000055/weights.pt, rewrites
+      # latest.json to epoch 55, and deletes newer managed checkpoint dirs.
+      selected_epoch: ${TRAINING_RESUME_EPOCH:54}
+      prune_after_selected: true
       # Set to N to train N additional epochs on every resumed invocation while
       # preserving optimizer/scheduler state. Zero continues to training.epochs
       # as a total target. Example chunking: epochs=20, additional_epochs=20.
-      additional_epochs: 0
+      additional_epochs: 10
   epochs: 100
   # Stop automatically when validation fitness has not improved for N epochs.
   # Optuna can still tune this through tuning.search_space.patience.

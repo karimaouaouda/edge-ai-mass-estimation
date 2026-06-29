@@ -175,7 +175,15 @@ class YOLOTrainer:
             self.config,
             artifacts_dir=self.artifacts_dir,
             prefer_resume=True,
+            rollback_to_selected=True,
         )
+        if model_source.rollback:
+            self.state.patch(
+                latest_checkpoint=model_source.path,
+                latest_checkpoint_manifest=model_source.manifest,
+                checkpoint_history=model_source.rollback.get("checkpoint_history", []),
+                checkpoint_rollback=model_source.rollback,
+            )
         model = YOLO(model_source.path, task=self.config.payload["model"]["task"])
         dataset_manifest = self._dataset_manifest()
         checkpoint_store = CheckpointStore(

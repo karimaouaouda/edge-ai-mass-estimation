@@ -25,6 +25,8 @@ class ModelSource:
     resume: bool
     completed_epochs: int = 0
     manifest: str | None = None
+    selected_epoch: int | None = None
+    rollback: dict[str, Any] | None = None
 
 
 def resolve_model_source(
@@ -32,6 +34,7 @@ def resolve_model_source(
     *,
     artifacts_dir: Path | None = None,
     prefer_resume: bool = True,
+    rollback_to_selected: bool = False,
 ) -> ModelSource:
     """Resolve an explicit/automatic checkpoint or the configured base model."""
     checkpointing = config.payload["training"].get("checkpointing", {})
@@ -51,6 +54,40 @@ def resolve_model_source(
                 resume=True,
                 completed_epochs=_checkpoint_epoch_from_name(path),
             )
+
+        selected_epoch = _selected_resume_epoch(resume_cfg)
+        if selected_epoch is not None:
+            selected = _managed_checkpoint_payload(root, selected_epoch)
+            if selected is not None:
+                rollback = None
+                if rollback_to_selected and bool(
+                    resume_cfg.get("prune_after_selected", True)
+                ):
+                    rollback = _rollback_managed_checkpoints(root, selected_epoch)
+                    selected = _managed_checkpoint_payload(root, selected_epoch)
+                    if selected is None:  # pragma: no cover - defensive filesystem guard
+                        raise FileNotFoundError(
+                            f"Selected checkpoint disappeared during rollback: "
+                            f"epoch_{selected_epoch:06d}"
+                        )
+                return ModelSource(
+                    path=str(selected["weights_path"].resolve()),
+                    kind="selected_checkpoint",
+                    resume=True,
+                    completed_epochs=int(selected["latest"].get("completed_epochs", 0)),
+                    manifest=str(selected["manifest_path"].resolve()),
+                    selected_epoch=selected_epoch,
+                    rollback=rollback,
+                )
+            if mode == "required":
+                raise FileNotFoundError(
+                    f"Configured resume epoch {selected_epoch} was not found under {root}"
+                )
+            if _managed_checkpoint_dirs(root) or (root / "latest.json").is_file():
+                raise FileNotFoundError(
+                    f"Configured resume epoch {selected_epoch} was not found under "
+                    f"{root}; refusing to resume a different checkpoint"
+                )
 
         latest = root / "latest.json"
         if latest.is_file():
@@ -272,17 +309,7 @@ class CheckpointStore:
         return latest
 
     def _checkpoint_history(self) -> list[dict[str, Any]]:
-        result = []
-        for manifest_path in sorted(self.root.glob("epoch_*/checkpoint_manifest.json")):
-            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-            result.append(
-                {
-                    "completed_epochs": payload.get("completed_epochs"),
-                    "weights": str((manifest_path.parent / "weights.pt").resolve()),
-                    "manifest": str(manifest_path.resolve()),
-                }
-            )
-        return result
+        return checkpoint_history(self.root)
 
     def _apply_retention(self) -> None:
         keep_last = int(self.settings.get("keep_last", 10))
@@ -377,6 +404,114 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _selected_resume_epoch(resume_cfg: dict[str, Any]) -> int | None:
+    """Return the configured managed checkpoint epoch, if one was selected."""
+    raw_value = resume_cfg.get("selected_epoch", resume_cfg.get("epoch"))
+    if raw_value in (None, ""):
+        return None
+    epoch = int(raw_value)
+    if epoch <= 0:
+        raise ValueError("training.checkpointing.resume.selected_epoch must be positive")
+    return epoch
+
+
+def _managed_checkpoint_payload(root: Path, completed_epochs: int) -> dict[str, Any] | None:
+    """Read one managed checkpoint directory as a latest.json-compatible payload."""
+    checkpoint_dir = root / f"epoch_{completed_epochs:06d}"
+    weights = checkpoint_dir / "weights.pt"
+    manifest_path = checkpoint_dir / "checkpoint_manifest.json"
+    if not weights.is_file() or not manifest_path.is_file():
+        return None
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    latest = _latest_payload_from_manifest(root, checkpoint_dir, manifest)
+    return {
+        "checkpoint_dir": checkpoint_dir,
+        "weights_path": weights,
+        "manifest_path": manifest_path,
+        "manifest": manifest,
+        "latest": latest,
+    }
+
+
+def _latest_payload_from_manifest(
+    root: Path,
+    checkpoint_dir: Path,
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    """Convert a checkpoint manifest into the durable latest.json pointer."""
+    directory_name = checkpoint_dir.name
+    best_weights = checkpoint_dir / "best.pt"
+    latest = {
+        **manifest,
+        "checkpoint_dir": directory_name,
+        "weights": f"{directory_name}/weights.pt",
+        "best_weights": f"{directory_name}/best.pt" if best_weights.is_file() else None,
+        "manifest": f"{directory_name}/checkpoint_manifest.json",
+    }
+    latest["resolved_weights"] = str((root / latest["weights"]).resolve())
+    latest["resolved_manifest"] = str((root / latest["manifest"]).resolve())
+    return latest
+
+
+def _rollback_managed_checkpoints(
+    root: Path,
+    selected_epoch: int,
+) -> dict[str, Any]:
+    """Delete managed checkpoints newer than selected_epoch and rewrite latest.json."""
+    selected = _managed_checkpoint_payload(root, selected_epoch)
+    if selected is None:
+        raise FileNotFoundError(
+            f"Cannot rollback because checkpoint epoch_{selected_epoch:06d} is missing"
+        )
+    deleted = []
+    root_resolved = root.resolve()
+    for checkpoint_dir in _managed_checkpoint_dirs(root):
+        completed = _checkpoint_epoch_from_name(checkpoint_dir)
+        if completed <= selected_epoch:
+            continue
+        resolved = checkpoint_dir.resolve()
+        if root_resolved not in resolved.parents:
+            raise RuntimeError(f"Refusing to delete checkpoint outside {root}: {resolved}")
+        shutil.rmtree(resolved)
+        deleted.append(checkpoint_dir.name)
+
+    latest = selected["latest"]
+    latest["rollback"] = {
+        "selected_epoch": selected_epoch,
+        "deleted_checkpoints": deleted,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _write_json_atomic(root / "latest.json", latest)
+    return {
+        "selected_epoch": selected_epoch,
+        "latest": str((root / "latest.json").resolve()),
+        "deleted_checkpoints": deleted,
+        "checkpoint_history": checkpoint_history(root),
+    }
+
+
+def _managed_checkpoint_dirs(root: Path) -> list[Path]:
+    return sorted(
+        (path for path in root.glob("epoch_*") if path.is_dir()),
+        key=_checkpoint_epoch_from_name,
+    )
+
+
+def checkpoint_history(root: Path) -> list[dict[str, Any]]:
+    """Return the durable managed checkpoint history under a checkpoint root."""
+    result = []
+    for manifest_path in sorted(root.glob("epoch_*/checkpoint_manifest.json")):
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        result.append(
+            {
+                "completed_epochs": payload.get("completed_epochs"),
+                "weights": str((manifest_path.parent / "weights.pt").resolve()),
+                "manifest": str(manifest_path.resolve()),
+            }
+        )
+    return result
+
+
 def _json_safe(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
@@ -423,6 +558,7 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 __all__ = [
     "CheckpointStore",
     "ModelSource",
+    "checkpoint_history",
     "load_model_or_checkpoint",
     "resume_target_epochs",
     "resolve_model_source",

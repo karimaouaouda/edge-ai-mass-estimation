@@ -163,6 +163,24 @@ class TrainingConfig:
             raise TrainingConfigError(
                 "training.checkpointing.resume.additional_epochs must be zero or greater"
             )
+        selected_epoch = resume.get("selected_epoch", resume.get("epoch"))
+        if selected_epoch not in (None, ""):
+            try:
+                selected_epoch_value = int(selected_epoch)
+            except (TypeError, ValueError) as exc:
+                raise TrainingConfigError(
+                    "training.checkpointing.resume.selected_epoch must be an integer"
+                ) from exc
+            if selected_epoch_value <= 0:
+                raise TrainingConfigError(
+                    "training.checkpointing.resume.selected_epoch must be greater than zero"
+                )
+        if "prune_after_selected" in resume and not isinstance(
+            resume["prune_after_selected"], bool
+        ):
+            raise TrainingConfigError(
+                "training.checkpointing.resume.prune_after_selected must be true or false"
+            )
 
         tuning = self.payload.get("tuning", {})
         if tuning.get("enabled", True) and not isinstance(tuning.get("search_space", {}), dict):

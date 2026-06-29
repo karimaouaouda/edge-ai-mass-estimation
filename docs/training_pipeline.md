@@ -157,6 +157,32 @@ Resume modes:
 - `never`: always start from `model.checkpoint`.
 - `required`: fail unless a managed or explicit resume checkpoint exists.
 
+To resume from a specific managed checkpoint epoch, set
+`training.checkpointing.resume.selected_epoch`. The default training configs
+select epoch 54:
+
+```yaml
+training:
+  checkpointing:
+    resume:
+      mode: auto
+      selected_epoch: 54
+      prune_after_selected: true
+```
+
+With `prune_after_selected: true`, the real `train` stage rewrites
+`checkpoints/latest.json` to the selected directory and deletes newer managed
+checkpoint directories. For example, selecting 55 loads
+`checkpoints/epoch_000055/weights.pt` and removes `epoch_000056+` directories
+before YOLO resumes.
+
+```bash
+edge-ai-mass train \
+  --stage train \
+  --config configs/training/yolo_segmentation.yaml \
+  --set training.checkpointing.resume.selected_epoch=55
+```
+
 Select a mounted or local checkpoint explicitly:
 
 ```bash

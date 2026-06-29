@@ -100,6 +100,11 @@ training:
       mode: auto
       # An explicit local/mounted checkpoint overrides automatic discovery.
       checkpoint: ${TRAINING_RESUME_CHECKPOINT:}
+      # Resume from a managed checkpoint directory by completed epoch number.
+      # Example: 55 loads checkpoints/epoch_000055/weights.pt, rewrites
+      # latest.json to epoch 55, and deletes newer managed checkpoint dirs.
+      selected_epoch: ${TRAINING_RESUME_EPOCH:54}
+      prune_after_selected: true
       # Set to N to train N additional epochs on every resumed invocation while
       # preserving optimizer/scheduler state. Zero continues to training.epochs
       # as a total target. Example chunking: epochs=20, additional_epochs=20.
@@ -239,7 +244,7 @@ evaluation:
   cast_model_to_half: true
   conf: 0.001
   iou: 0.70
-  plots: false
+  plots: true
   save_json: true
   workers: 0
   annotated_samples: 12
@@ -248,9 +253,9 @@ evaluation:
   pre_export:
     # Optional: export a TensorRT FP16 engine before evaluation. Enable only
     # when TensorRT is available and compatible with the current CUDA runtime.
-    enabled: ${EVALUATION_PRE_EXPORT_ENGINE:false}
+    enabled: ${EVALUATION_PRE_EXPORT_ENGINE:true}
     format: engine
-    use_for_evaluation: ${EVALUATION_USE_ENGINE_FOR_EVAL:false}
+    use_for_evaluation: ${EVALUATION_USE_ENGINE_FOR_EVAL:true}
     continue_on_error: false
     options:
       half: true
@@ -266,7 +271,7 @@ export:
   # The export stage always reads artifacts/.../models/best.pt, never last.pt.
   enabled: false
   # Select one or many: [onnx], [engine], or [onnx, engine].
-  formats: [onnx]
+  formats: [onnx, engine]
   continue_on_error: false
   options:
     common:

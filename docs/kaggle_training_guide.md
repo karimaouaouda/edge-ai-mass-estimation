@@ -459,6 +459,12 @@ chunks, set `training.epochs` to the first chunk and
 Keep the complete run artifact directory between sessions; the next invocation
 with `resume.mode=auto` loads `checkpoints/latest.json`.
 
+To rollback and resume from a specific managed checkpoint, set
+`training.checkpointing.resume.selected_epoch`. The repository defaults this
+to 54. Setting it to 55 loads `checkpoints/epoch_000055/weights.pt`, rewrites
+`checkpoints/latest.json`, and deletes newer managed checkpoint directories
+before training resumes.
+
 ```python
 OVERRIDES += [
     "training.epochs=20",
@@ -466,6 +472,8 @@ OVERRIDES += [
     "training.early_stopping.patience=10",
     "training.checkpointing.interval_epochs=5",
     "training.checkpointing.resume.mode=auto",
+    "training.checkpointing.resume.selected_epoch=54",
+    "training.checkpointing.resume.prune_after_selected=true",
     "training.checkpointing.resume.additional_epochs=20",
 ]
 ```

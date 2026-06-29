@@ -548,6 +548,105 @@ def test_periodic_checkpoint_stores_weights_metrics_curves_and_latest(tmp_path: 
     assert Path(resolved.path) == (checkpoint_dir / "weights.pt").resolve()
 
 
+def test_selected_checkpoint_resume_prunes_newer_checkpoints_and_rewrites_latest(
+    tmp_path: Path,
+):
+    config = _config(tmp_path)
+    root = config.artifacts_dir / "checkpoints"
+
+    def write_checkpoint(epoch: int) -> None:
+        checkpoint_dir = root / f"epoch_{epoch:06d}"
+        checkpoint_dir.mkdir(parents=True)
+        (checkpoint_dir / "weights.pt").write_bytes(f"weights-{epoch}".encode())
+        (checkpoint_dir / "best.pt").write_bytes(f"best-{epoch}".encode())
+        (checkpoint_dir / "checkpoint_manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "epoch": epoch - 1,
+                    "completed_epochs": epoch,
+                    "target_epochs": 100,
+                    "weights": "weights.pt",
+                    "best_weights": "best.pt",
+                    "metrics": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    for epoch in (54, 55, 60):
+        write_checkpoint(epoch)
+    (root / "latest.json").write_text(
+        json.dumps(
+            {
+                "completed_epochs": 60,
+                "weights": "epoch_000060/weights.pt",
+                "manifest": "epoch_000060/checkpoint_manifest.json",
+            }
+        ),
+        encoding="utf-8",
+    )
+    config.payload["training"]["checkpointing"] = {
+        "enabled": True,
+        "resume": {
+            "mode": "auto",
+            "selected_epoch": 55,
+            "prune_after_selected": True,
+        },
+    }
+
+    source = resolve_model_source(
+        config,
+        artifacts_dir=config.artifacts_dir,
+        rollback_to_selected=True,
+    )
+    latest = json.loads((root / "latest.json").read_text(encoding="utf-8"))
+
+    assert source.kind == "selected_checkpoint"
+    assert source.selected_epoch == 55
+    assert source.completed_epochs == 55
+    assert Path(source.path) == (root / "epoch_000055" / "weights.pt").resolve()
+    assert (root / "epoch_000054").is_dir()
+    assert (root / "epoch_000055").is_dir()
+    assert not (root / "epoch_000060").exists()
+    assert latest["weights"] == "epoch_000055/weights.pt"
+    assert latest["rollback"]["selected_epoch"] == 55
+    assert source.rollback["deleted_checkpoints"] == ["epoch_000060"]
+
+
+def test_training_configs_default_selected_resume_epoch_is_54():
+    for path in (
+        "configs/training/yolo_segmentation.yaml",
+        "configs/training/yolo_segmentation_pretrain.yaml",
+        "configs/training/yolo_segmentation_fine_tune.yaml",
+    ):
+        config = TrainingConfig.load(path)
+        resume = config.payload["training"]["checkpointing"]["resume"]
+        assert resume["selected_epoch"] == 54
+        assert resume["prune_after_selected"] is True
+
+
+def test_selected_checkpoint_resume_refuses_different_checkpoint_when_missing(
+    tmp_path: Path,
+):
+    config = _config(tmp_path)
+    root = config.artifacts_dir / "checkpoints"
+    checkpoint_dir = root / "epoch_000060"
+    checkpoint_dir.mkdir(parents=True)
+    (checkpoint_dir / "weights.pt").write_bytes(b"weights")
+    (checkpoint_dir / "checkpoint_manifest.json").write_text(
+        json.dumps({"completed_epochs": 60, "weights": "weights.pt"}),
+        encoding="utf-8",
+    )
+    config.payload["training"]["checkpointing"] = {
+        "enabled": True,
+        "resume": {"mode": "auto", "selected_epoch": 54},
+    }
+
+    with pytest.raises(FileNotFoundError, match="refusing to resume"):
+        resolve_model_source(config, artifacts_dir=config.artifacts_dir)
+
+
 def test_train_args_enable_checkpoint_callback_without_duplicate_epoch_weights(
     tmp_path: Path,
 ):
@@ -663,6 +762,17 @@ def test_checkpoint_interval_must_be_positive(tmp_path: Path):
     }
 
     with pytest.raises(TrainingConfigError, match="interval_epochs"):
+        TrainingConfig(payload, tmp_path / "config.yaml")
+
+
+def test_selected_checkpoint_epoch_must_be_positive(tmp_path: Path):
+    payload = _config(tmp_path).payload
+    payload["training"]["checkpointing"] = {
+        "enabled": True,
+        "resume": {"mode": "auto", "selected_epoch": 0},
+    }
+
+    with pytest.raises(TrainingConfigError, match="selected_epoch"):
         TrainingConfig(payload, tmp_path / "config.yaml")
 
 

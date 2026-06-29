@@ -115,6 +115,11 @@ training:
       mode: auto
       # An explicit local/mounted checkpoint overrides automatic discovery.
       checkpoint: ${TRAINING_RESUME_CHECKPOINT:}
+      # Resume from a managed checkpoint directory by completed epoch number.
+      # Example: 55 loads checkpoints/epoch_000055/weights.pt, rewrites
+      # latest.json to epoch 55, and deletes newer managed checkpoint dirs.
+      selected_epoch: ${TRAINING_RESUME_EPOCH:54}
+      prune_after_selected: true
       # Set to N to train N additional epochs on every resumed invocation while
       # preserving optimizer/scheduler state. Zero continues to training.epochs
       # as a total target. Example chunking: epochs=20, additional_epochs=20.
