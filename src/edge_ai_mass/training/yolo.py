@@ -301,7 +301,8 @@ class YOLOTrainer:
         del model
         _release_accelerator_memory()
         return summary
-
+    
+    @torch.inference_mode()
     def evaluate(self) -> dict[str, Any]:
         print("evaluation start ==========> <===================")
         self.state.require("best_weights")
@@ -315,7 +316,7 @@ class YOLOTrainer:
         precision = self._evaluation_precision_config(evaluation)
         _release_accelerator_memory()
 
-        with tracker.run(), torch.no_grad():
+        with tracker.run():
             pre_export = self._prepare_evaluation_pre_export(
                 YOLO,
                 source_best_weights=source_best_weights,
