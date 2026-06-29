@@ -329,7 +329,7 @@ class YOLOTrainer:
                 model,
                 precision=precision,
             )
-            model.eval()
+            precision_report["eval_mode"] = _set_evaluation_mode(model)
             tracker.mlflow.log_dict(precision_report, "evaluation/precision.json")
             tracker.mlflow.log_dict(pre_export, "evaluation/pre_export.json")
 
@@ -1158,6 +1158,28 @@ def _parameter_footprint(module: Any) -> dict[str, Any] | None:
         "bytes": total_bytes,
         "megabytes": round(total_bytes / (1024**2), 4),
         "dtypes": dtype_counts,
+    }
+
+
+def _set_evaluation_mode(model: Any) -> dict[str, Any]:
+    """Put a PyTorch-backed YOLO model in eval mode when that backend exists.
+
+    TensorRT/ONNX backends are not always torch modules. Calling ``YOLO.eval()``
+    can delegate into ``model.model.eval()`` and fail when ``model.model`` is a
+    string/path-like backend. Validation itself still runs through
+    ``YOLO.val(...)``, so non-PyTorch backends should simply skip this step.
+    """
+    module = getattr(model, "model", None)
+    eval_fn = getattr(module, "eval", None)
+    if callable(eval_fn):
+        eval_fn()
+        return {
+            "status": "torch_module_eval",
+            "backend_type": type(module).__name__,
+        }
+    return {
+        "status": "skipped_non_torch_backend",
+        "backend_type": type(module).__name__ if module is not None else None,
     }
 
 

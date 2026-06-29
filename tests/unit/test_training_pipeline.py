@@ -31,6 +31,7 @@ from edge_ai_mass.training.yolo import (
     YOLOTrainer,
     _organize_export,
     _path_digest,
+    _set_evaluation_mode,
     normalize_metrics,
 )
 
@@ -359,6 +360,17 @@ def test_evaluation_precision_casts_model_parameters_to_fp16(tmp_path: Path):
         report["parameter_footprint_before"]["bytes"] // 2
     )
     assert {parameter.dtype for parameter in module.parameters()} == {torch.float16}
+
+
+def test_evaluation_mode_skips_non_torch_engine_backend():
+    model = SimpleNamespace(model="best.engine")
+
+    report = _set_evaluation_mode(model)
+
+    assert report == {
+        "status": "skipped_non_torch_backend",
+        "backend_type": "str",
+    }
 
 
 def test_evaluation_validation_args_pass_half_precision_without_hidden_device(
