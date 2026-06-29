@@ -310,6 +310,7 @@ class YOLOTrainer:
         torch.cuda.empty_cache()        
         batch = 1
         print(f"train on batch {batch if batch is not None else 'auto'} with workers {evaluation.get('workers', 0)}")
+        print(f"reduced to fp16")
         with tracker.run(), torch.no_grad():
             model.eval()
             
