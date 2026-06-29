@@ -337,6 +337,7 @@ class YOLOTrainer:
                     exist_ok=True,
                     workers=int(evaluation.get("workers", 0)),
                     max_det=int(evaluation.get("max_det", 3)),
+                    half=True
                 )
                 reports[str(split)] = normalize_metrics(metrics)
                 tracker.log_metrics(reports[str(split)], prefix=f"{split}_")

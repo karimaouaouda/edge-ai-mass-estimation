@@ -3,7 +3,7 @@
 
 active_profile: depth_anything
 pipeline_config: configs/pipeline/default.yaml
-camera: 0
+camera: 1
 frames: 1
 interval_seconds: 0.0
 output: data/raw/depth_metrics/camera_depth_metrics.csv
@@ -17,7 +17,7 @@ profiles:
   # Uses stages.depth.primary from pipeline_config.
   depth_anything:
     depth_source: primary
-    preview_source: metric
+    preview_source: raw
 
   # Uses stages.depth.fallback from pipeline_config.
   midas:

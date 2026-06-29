@@ -60,7 +60,7 @@ def main() -> None:
     depth_module = _load_depth_module(cfg, source=depth_source)
     depth_scale = DepthScaleConfig.from_config(cfg.get("depth_scale", {}))
 
-    camera = str(script_cfg.get("camera", "0"))
+    camera = str(script_cfg.get("camera", "1"))
     camera_source: int | str = int(camera) if camera.isdigit() else camera
     capture = cv2.VideoCapture(camera_source)
     if not capture.isOpened():
