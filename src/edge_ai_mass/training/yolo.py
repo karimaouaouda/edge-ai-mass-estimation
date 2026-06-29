@@ -303,6 +303,7 @@ class YOLOTrainer:
         return summary
 
     def evaluate(self) -> dict[str, Any]:
+        print("evaluation start ==========> <===================")
         self.state.require("best_weights")
         YOLO = _require_yolo()
         evaluation = self.config.payload.get("evaluation", {})
