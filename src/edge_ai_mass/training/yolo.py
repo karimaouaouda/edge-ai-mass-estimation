@@ -330,7 +330,7 @@ class YOLOTrainer:
                 model,
                 precision=precision,
             )
-            precision_report["eval_mode"] = _set_evaluation_mode(model)
+            precision_report["eval_mode"] = None
             tracker.mlflow.log_dict(precision_report, "evaluation/precision.json")
             tracker.mlflow.log_dict(pre_export, "evaluation/pre_export.json")
 
