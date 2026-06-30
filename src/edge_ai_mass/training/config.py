@@ -213,10 +213,10 @@ class TrainingConfig:
         if not isinstance(pre_export, dict):
             raise TrainingConfigError("evaluation.pre_export must be a mapping")
         if pre_export.get("enabled", False):
-            pre_export_format = str(pre_export.get("format", "engine"))
-            if pre_export_format != "engine":
+            pre_export_format = str(pre_export.get("format", "engine")).lower()
+            if pre_export_format not in {"engine", "onnx"}:
                 raise TrainingConfigError(
-                    "evaluation.pre_export.format currently supports only 'engine'"
+                    "evaluation.pre_export.format must be either 'engine' or 'onnx'"
                 )
             pre_export_options = pre_export.get("options", {})
             if not isinstance(pre_export_options, dict):

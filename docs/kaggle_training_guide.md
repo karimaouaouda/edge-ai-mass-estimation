@@ -300,19 +300,21 @@ OVERRIDES += [
 ]
 ```
 
-If the Kaggle image has a compatible TensorRT stack, you can also build a
-16-bit TensorRT engine before evaluation and validate through that engine:
+For lower-memory validation, build a 16-bit ONNX artifact before evaluation
+and validate through that exported backend:
 
 ```python
 OVERRIDES += [
     "evaluation.pre_export.enabled=true",
+    "evaluation.pre_export.format=onnx",
     "evaluation.pre_export.use_for_evaluation=true",
 ]
 ```
 
-Keep this disabled when TensorRT is unavailable; regular FP16 PyTorch
-evaluation still uses the best checkpoint and records the parameter-memory
-reduction in the evaluation report.
+TensorRT is still available with `evaluation.pre_export.format=engine`, but
+keep it for environments with a compatible TensorRT stack. Regular FP16
+PyTorch evaluation still uses the best checkpoint and records the
+parameter-memory reduction in the evaluation report.
 
 Export is disabled by default. Select one format:
 

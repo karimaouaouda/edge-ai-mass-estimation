@@ -293,19 +293,23 @@ evaluation:
 Set `evaluation.precision=fp32` when you need a strict FP32 comparison or when
 running CPU-only validation.
 
-When a TensorRT-compatible environment is available, evaluation can also
-pre-export a 16-bit TensorRT engine before validation:
+Evaluation can also pre-export a lower-memory backend before validation and
+then run validation through that exported artifact. ONNX is the portable
+default; TensorRT remains available when a compatible runtime exists.
 
 ```bash
 edge-ai-mass train --stage evaluate \
   --config configs/training/yolo_segmentation.yaml \
   --set evaluation.pre_export.enabled=true \
+  --set evaluation.pre_export.format=onnx \
   --set evaluation.pre_export.use_for_evaluation=true
 ```
 
-That pre-export uses `half=true` and `int8=false` by default, so the artifact
-metadata records `quantization_bits: 16`. It is disabled by default because
-TensorRT engine builds are tied to the CUDA/TensorRT runtime.
+That pre-export uses `half=true` by default when
+`evaluation.precision=fp16`, so the artifact metadata records
+`quantization_bits: 16`. To use TensorRT instead, set
+`evaluation.pre_export.format=engine`; engine builds are tied to the local
+CUDA/TensorRT runtime.
 
 ## Best-model export
 

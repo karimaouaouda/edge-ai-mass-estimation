@@ -762,11 +762,11 @@ class YOLOTrainer:
         evaluation: dict[str, Any],
         tracker: MLflowSession,
     ) -> dict[str, Any]:
-        """Optionally export an FP16 TensorRT engine before evaluation.
+        """Optionally export an optimized backend before evaluation.
 
-        This is disabled by default because TensorRT engine export is
-        environment-specific. When enabled, it uses ``half=True`` and
-        ``int8=False`` by default, which is the FP16/16-bit quantization path.
+        Supported formats are ONNX and TensorRT engine. ONNX is more portable
+        for Kaggle/CI memory reduction; TensorRT remains available when the
+        runtime has a compatible TensorRT installation.
         """
         pre_export = evaluation.get("pre_export", {})
         if not pre_export or not pre_export.get("enabled", False):
@@ -776,10 +776,12 @@ class YOLOTrainer:
                 "reason": "evaluation.pre_export.enabled is false",
             }
 
-        export_format = str(pre_export.get("format", "engine"))
-        options = dict(pre_export.get("options", {}))
-        options.setdefault("half", True)
-        options.setdefault("int8", False)
+        export_format = str(pre_export.get("format", "engine")).lower()
+        options = self._evaluation_pre_export_options(
+            export_format,
+            evaluation=evaluation,
+            configured_options=dict(pre_export.get("options", {})),
+        )
         options.setdefault(
             "imgsz",
             int(
@@ -793,7 +795,7 @@ class YOLOTrainer:
             "device",
             evaluation.get("device", self.config.payload["training"].get("device", 0)),
         )
-        if options.get("int8") and "data" not in options:
+        if export_format == "engine" and options.get("int8") and "data" not in options:
             options["data"] = str(self.config.dataset_dir / "dataset.yaml")
 
         destination_dir = self.artifacts_dir / "evaluation" / "pre_export" / export_format
@@ -859,6 +861,37 @@ class YOLOTrainer:
         finally:
             del engine_model
             _release_accelerator_memory()
+
+    def _evaluation_pre_export_options(
+        self,
+        export_format: str,
+        *,
+        evaluation: dict[str, Any],
+        configured_options: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Return format-specific export options for evaluation pre-export."""
+        options = dict(configured_options)
+        precision = str(evaluation.get("precision", "fp32")).lower()
+        if export_format == "onnx":
+            options.setdefault("opset", 17)
+            options.setdefault("dynamic", False)
+            options.setdefault("simplify", True)
+            options.setdefault("half", precision == "fp16")
+            options.setdefault("nms", False)
+            options.pop("int8", None)
+            options.pop("workspace", None)
+            return options
+        if export_format == "engine":
+            options.setdefault("half", precision == "fp16")
+            options.setdefault("int8", False)
+            options.setdefault("dynamic", False)
+            options.setdefault("workspace", 4)
+            options.setdefault("simplify", True)
+            options.setdefault("nms", False)
+            return options
+        raise ValueError(
+            f"Unsupported evaluation pre-export format: {export_format}"
+        )
 
     def _log_dataset_visualizations(self, tracker: MLflowSession) -> dict[str, Any]:
         report = create_dataset_visualizations(self.config)

@@ -47,6 +47,7 @@ class TrainingPipeline:
             "optuna": bool(importlib.util.find_spec("optuna")),
             "dvc": bool(importlib.util.find_spec("dvc")),
             "onnx": bool(importlib.util.find_spec("onnx")),
+            "onnxruntime": bool(importlib.util.find_spec("onnxruntime")),
             "tensorrt": bool(importlib.util.find_spec("tensorrt")),
             "zenml": bool(importlib.util.find_spec("zenml")),
             "kaggle": bool(importlib.util.find_spec("kaggle")),
@@ -64,12 +65,12 @@ class TrainingPipeline:
             required_packages.add("optuna")
         evaluation = self.config.payload.get("evaluation", {})
         pre_export = evaluation.get("pre_export", {})
-        if (
-            "evaluate" in stages
-            and pre_export.get("enabled", False)
-            and pre_export.get("format", "engine") == "engine"
-        ):
-            required_packages.add("tensorrt")
+        if "evaluate" in stages and pre_export.get("enabled", False):
+            pre_export_format = str(pre_export.get("format", "engine")).lower()
+            if pre_export_format == "engine":
+                required_packages.add("tensorrt")
+            if pre_export_format == "onnx":
+                required_packages.update({"onnx", "onnxruntime"})
         if "export" in stages and self.config.payload.get("export", {}).get("enabled", False):
             export_formats = set(self.config.payload["export"].get("formats", []))
             if "onnx" in export_formats:

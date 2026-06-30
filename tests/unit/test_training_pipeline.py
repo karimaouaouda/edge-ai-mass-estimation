@@ -296,6 +296,31 @@ def test_plan_checks_tensorrt_for_evaluation_engine_pre_export(
     assert "missing Python package: tensorrt" in plan["blocking_issues"]
 
 
+def test_plan_checks_onnxruntime_for_evaluation_onnx_pre_export(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import edge_ai_mass.training.pipeline as pipeline_module
+
+    config = _config(tmp_path)
+    config.payload["evaluation"] = {
+        "pre_export": {"enabled": True, "format": "onnx"}
+    }
+    original_find_spec = pipeline_module.importlib.util.find_spec
+
+    def fake_find_spec(name: str):
+        if name == "onnxruntime":
+            return None
+        return original_find_spec(name)
+
+    monkeypatch.setattr(pipeline_module.importlib.util, "find_spec", fake_find_spec)
+
+    plan = TrainingPipeline(config).plan("evaluate")
+
+    assert "missing Python package: onnxruntime" in plan["blocking_issues"]
+    assert "missing Python package: tensorrt" not in plan["blocking_issues"]
+
+
 def test_metric_normalization_exposes_stable_names():
     metrics = {"metrics/mAP50-95(M)": 0.42, "metrics/mAP50(B)": 0.71}
     normalized = normalize_metrics(metrics)
@@ -445,6 +470,57 @@ def test_evaluation_can_pre_export_fp16_engine_for_validation(tmp_path: Path):
     assert FakeYOLO.calls[0]["format"] == "engine"
     assert FakeYOLO.calls[0]["options"]["half"] is True
     assert FakeYOLO.calls[0]["options"]["int8"] is False
+
+
+def test_evaluation_can_pre_export_fp16_onnx_for_validation(tmp_path: Path):
+    config = _config(tmp_path)
+    trainer = YOLOTrainer(config, PipelineState(config.artifacts_dir / "state.json"))
+    best = tmp_path / "best.pt"
+    best.write_bytes(b"best")
+
+    class FakeYOLO:
+        calls: list[dict] = []
+
+        def __init__(self, weights: str, *, task: str):
+            self.weights = weights
+            self.task = task
+
+        def export(self, *, format: str, **options):
+            self.calls.append({"format": format, "options": options})
+            exported = tmp_path / f"best.{format}"
+            exported.write_bytes(b"onnx")
+            return str(exported)
+
+    tracker = SimpleNamespace(
+        mlflow=SimpleNamespace(log_artifacts=lambda *args, **kwargs: None)
+    )
+    report = trainer._prepare_evaluation_pre_export(
+        FakeYOLO,
+        source_best_weights=best,
+        evaluation={
+            "precision": "fp16",
+            "imgsz": 320,
+            "batch": 1,
+            "device": 0,
+            "pre_export": {
+                "enabled": True,
+                "format": "onnx",
+                "use_for_evaluation": True,
+                "options": {"half": True, "dynamic": False},
+            },
+        },
+        tracker=tracker,
+    )
+
+    assert report["status"] == "complete"
+    assert report["format"] == "onnx"
+    assert report["quantization_bits"] == 16
+    assert report["evaluation_weights"].endswith(".onnx")
+    assert Path(report["evaluation_weights"]).is_file()
+    assert FakeYOLO.calls[0]["format"] == "onnx"
+    assert FakeYOLO.calls[0]["options"]["half"] is True
+    assert "int8" not in FakeYOLO.calls[0]["options"]
+    assert "workspace" not in FakeYOLO.calls[0]["options"]
 
 
 def test_evaluation_precision_must_be_fp32_or_fp16(tmp_path: Path):

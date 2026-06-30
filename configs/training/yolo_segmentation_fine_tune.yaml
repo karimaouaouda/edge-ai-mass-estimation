@@ -266,17 +266,16 @@ evaluation:
   sample_seed: 42
   prediction_conf: 0.25
   pre_export:
-    # Optional: export a TensorRT FP16 engine before evaluation. Enable only
-    # when TensorRT is available and compatible with the current CUDA runtime.
-    enabled: ${EVALUATION_PRE_EXPORT_ENGINE:false}
-    format: engine
-    use_for_evaluation: ${EVALUATION_USE_ENGINE_FOR_EVAL:false}
+    # Optional: export ONNX or TensorRT before evaluation and validate through
+    # that backend. ONNX is the portable low-memory default for Kaggle.
+    enabled: ${EVALUATION_PRE_EXPORT_ENABLED:false}
+    format: ${EVALUATION_PRE_EXPORT_FORMAT:onnx}
+    use_for_evaluation: ${EVALUATION_USE_PRE_EXPORT_FOR_EVAL:false}
     continue_on_error: false
     options:
+      opset: 17
       half: true
-      int8: false
       dynamic: false
-      workspace: 4
       simplify: true
       nms: false
   # Example release gate: {test.mask_map50_95: 0.35}
