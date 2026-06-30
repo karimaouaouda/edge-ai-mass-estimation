@@ -29,6 +29,7 @@ from edge_ai_mass.training.tracking import normalize_uri
 from edge_ai_mass.training.visualization import create_dataset_visualizations
 from edge_ai_mass.training.yolo import (
     YOLOTrainer,
+    _is_cuda_out_of_memory,
     _organize_export,
     _path_digest,
     _set_evaluation_mode,
@@ -396,6 +397,52 @@ def test_evaluation_mode_skips_non_torch_engine_backend():
         "status": "skipped_non_torch_backend",
         "backend_type": "str",
     }
+
+
+def test_cuda_oom_detection_handles_wrapped_runtime_errors():
+    root = RuntimeError("CUDA out of memory. Tried to allocate 256.00 MiB.")
+    wrapped = RuntimeError(f"Failed to run validation: {root}")
+    wrapped.__cause__ = root
+
+    assert _is_cuda_out_of_memory(wrapped) is True
+    assert _is_cuda_out_of_memory(RuntimeError("validation metric is missing")) is False
+
+
+def test_cpu_evaluation_fallback_disables_cuda_precision_and_engine_export(
+    tmp_path: Path,
+):
+    config = _config(tmp_path)
+    trainer = YOLOTrainer(config, PipelineState(config.artifacts_dir / "state.json"))
+
+    fallback = trainer._evaluation_for_device(
+        {
+            "precision": "fp16",
+            "half": True,
+            "cast_model_to_half": True,
+            "device": 0,
+            "pre_export": {
+                "enabled": True,
+                "format": "engine",
+                "use_for_evaluation": True,
+                "options": {"half": True, "device": 0},
+            },
+        },
+        device="cpu",
+        cuda_oom_fallback=True,
+    )
+
+    assert fallback["device"] == "cpu"
+    assert fallback["precision"] == "fp32"
+    assert fallback["half"] is False
+    assert fallback["cast_model_to_half"] is False
+    assert fallback["pre_export"]["enabled"] is False
+    assert fallback["pre_export"]["use_for_evaluation"] is False
+    assert fallback["pre_export"]["options"]["device"] == "cpu"
+    assert fallback["pre_export"]["options"]["half"] is False
+    assert (
+        fallback["pre_export"]["disabled_reason"]
+        == "cpu_fallback_skips_tensorrt_engine_pre_export"
+    )
 
 
 def test_evaluation_validation_args_pass_half_precision_without_hidden_device(

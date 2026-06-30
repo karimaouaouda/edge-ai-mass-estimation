@@ -497,15 +497,14 @@ def _resolve_source_images_root(
     debug_cfg = debug_cfg or {}
     configured = config.path(source_cfg["images"])
     suffixes = source_cfg.get("images_root_candidates", ["."])
-    if False: # replace later with configuration
-        _emit_debug(
-            debug_cfg,
-            "image_root.before",
-            source=source_cfg.get("name"),
-            configured=configured,
-            configured_exists=configured.is_dir(),
-            candidates=suffixes,
-        )
+    _emit_debug(
+        debug_cfg,
+        "image_root.before",
+        source=source_cfg.get("name"),
+        configured=configured,
+        configured_exists=configured.is_dir(),
+        candidates=suffixes,
+    )
     for raw_suffix in suffixes:
         suffix = Path(str(raw_suffix).replace("\\", "/"))
         # Candidate suffixes are trusted configuration, but keeping them

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import gc
 import hashlib
 import json
@@ -307,16 +308,121 @@ class YOLOTrainer:
         print("evaluation start ==========> <===================")
         self.state.require("best_weights")
         YOLO = _require_yolo()
-        evaluation = self.config.payload.get("evaluation", {})
+        base_evaluation = copy.deepcopy(self.config.payload.get("evaluation", {}))
+        source_best_weights = Path(self.state.data["best_weights"]).resolve()
+        requested_device = base_evaluation.get("device")
+        if requested_device is None:
+            requested_device = self.config.payload["training"].get("device", 0)
+        attempts = [
+            {
+                "device": requested_device,
+                "fallback_used": False,
+                "fallback_reason": None,
+            }
+        ]
+        if not _is_cpu_device(requested_device):
+            attempts.append(
+                {
+                    "device": "cpu",
+                    "fallback_used": True,
+                    "fallback_reason": "cuda_out_of_memory",
+                }
+            )
+
+        last_error: Exception | None = None
+        for attempt_number, attempt in enumerate(attempts, start=1):
+            evaluation = self._evaluation_for_device(
+                base_evaluation,
+                device=attempt["device"],
+                cuda_oom_fallback=bool(attempt["fallback_used"]),
+            )
+            precision = self._evaluation_precision_config(evaluation)
+            print(
+                "[evaluation] Attempt "
+                f"{attempt_number}/{len(attempts)} starting on device="
+                f"{evaluation.get('device')} precision={precision['precision']} "
+                f"fallback_used={attempt['fallback_used']}"
+            )
+            try:
+                report, report_path = self._evaluate_once(
+                    YOLO,
+                    evaluation=evaluation,
+                    precision=precision,
+                    source_best_weights=source_best_weights,
+                    requested_device=requested_device,
+                    fallback_used=bool(attempt["fallback_used"]),
+                    fallback_reason=attempt["fallback_reason"],
+                )
+            except Exception as exc:
+                last_error = exc
+                if (
+                    attempt_number == 1
+                    and len(attempts) > 1
+                    and _is_cuda_out_of_memory(exc)
+                ):
+                    print(
+                        "[evaluation] CUDA out-of-memory detected during evaluation. "
+                        "Clearing accelerator memory and retrying the full evaluation "
+                        "on CPU."
+                    )
+                    print(f"[evaluation] Original error: {type(exc).__name__}: {exc}")
+                    logger.warning(
+                        "CUDA OOM during evaluation; retrying on CPU. Error: %s",
+                        exc,
+                    )
+                    pre_export_root = self.artifacts_dir / "evaluation" / "pre_export"
+                    if pre_export_root.exists():
+                        shutil.rmtree(pre_export_root)
+                        print(
+                            "[evaluation] Removed partial GPU pre-export artifacts: "
+                            f"{pre_export_root}"
+                        )
+                    _release_accelerator_memory()
+                    continue
+                _release_accelerator_memory()
+                raise
+
+            self.state.update(
+                "evaluate",
+                evaluation=report,
+                evaluation_report=str(report_path),
+            )
+            _release_accelerator_memory()
+            if attempt["fallback_used"]:
+                print("[evaluation] CPU fallback evaluation completed successfully.")
+            else:
+                print("[evaluation] Evaluation completed successfully.")
+            return report
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Evaluation failed without an exception to report.")
+
+    def _evaluate_once(
+        self,
+        YOLO: Any,
+        *,
+        evaluation: dict[str, Any],
+        precision: dict[str, Any],
+        source_best_weights: Path,
+        requested_device: Any,
+        fallback_used: bool,
+        fallback_reason: str | None,
+    ) -> tuple[dict[str, Any], Path]:
         tracker = MLflowSession(self.config, self.state)
         reports: dict[str, Any] = {}
         artifact_reports: dict[str, Any] = {}
         evaluation_root = self.artifacts_dir / "evaluation"
-        source_best_weights = Path(self.state.data["best_weights"]).resolve()
-        precision = self._evaluation_precision_config(evaluation)
+        model: Any | None = None
         _release_accelerator_memory()
 
         with tracker.run():
+            pre_export_cfg = evaluation.get("pre_export") or {}
+            print(
+                "[evaluation] Pre-export enabled="
+                f"{bool(pre_export_cfg.get('enabled', False))} "
+                f"format={pre_export_cfg.get('format')} device={evaluation.get('device')}"
+            )
             pre_export = self._prepare_evaluation_pre_export(
                 YOLO,
                 source_best_weights=source_best_weights,
@@ -326,78 +432,146 @@ class YOLOTrainer:
             evaluation_weights = Path(
                 pre_export.get("evaluation_weights") or source_best_weights
             ).resolve()
-            model = YOLO(str(evaluation_weights), task=self.config.payload["model"]["task"])
-            precision_report = self._prepare_evaluation_precision(
-                model,
-                precision=precision,
-            )
-            precision_report["eval_mode"] = None
-            tracker.mlflow.log_dict(precision_report, "evaluation/precision.json")
-            tracker.mlflow.log_dict(pre_export, "evaluation/pre_export.json")
-
-            for split in evaluation.get("splits", ["val", "test"]):
-                split_dir = evaluation_root / str(split)
-                if split_dir.exists():
-                    shutil.rmtree(split_dir)
-
-                validation_args = self._evaluation_validation_args(
-                    evaluation,
-                    split=str(split),
-                    precision=precision,
-                    output_root=evaluation_root,
+            print(f"[evaluation] Loading evaluation weights: {evaluation_weights}")
+            try:
+                model = YOLO(
+                    str(evaluation_weights), task=self.config.payload["model"]["task"]
                 )
-                metrics = model.val(**validation_args)
-                reports[str(split)] = normalize_metrics(metrics)
-                tracker.log_metrics(reports[str(split)], prefix=f"{split}_")
-                actual_split_dir = Path(getattr(metrics, "save_dir", split_dir))
-                annotated = self._write_annotated_evaluation_samples(
+                precision_report = self._prepare_evaluation_precision(
                     model,
-                    split=str(split),
-                    split_dir=actual_split_dir,
-                    evaluation=evaluation,
+                    precision=precision,
                 )
-                curves = _move_selected(
-                    actual_split_dir,
-                    actual_split_dir / "curves",
-                    patterns={
-                        "*curve*.png",
-                        "confusion_matrix*.png",
-                        "results*.png",
-                        "results*.csv",
-                    },
-                )
-                artifact_reports[str(split)] = {
-                    "output_dir": str(actual_split_dir),
-                    "curves": curves,
-                    "annotated_samples": annotated,
-                }
-                if actual_split_dir.is_dir():
-                    tracker.mlflow.log_artifacts(
-                        str(actual_split_dir), artifact_path=f"evaluation/{split}"
-                    )
+                precision_report["eval_mode"] = _set_evaluation_mode(model)
+                tracker.mlflow.log_dict(precision_report, "evaluation/precision.json")
+                tracker.mlflow.log_dict(pre_export, "evaluation/pre_export.json")
 
-            self._enforce_metric_gates(reports, evaluation.get("quality_gates", {}))
-            report = {
-                "weights": str(source_best_weights),
-                "evaluation_weights": str(evaluation_weights),
-                "precision": precision_report,
-                "pre_export": pre_export,
-                "dataset_fingerprint": self._dataset_manifest()["dataset_fingerprint"],
-                "splits": reports,
-                "artifacts": artifact_reports,
-                "quality_gates": evaluation.get("quality_gates", {}),
-                "passed": True,
-            }
-            report_path = self._write_json("reports/evaluation.json", report)
-            tracker.mlflow.log_artifact(str(report_path), artifact_path="reports")
-            del model
-        self.state.update(
-            "evaluate",
-            evaluation=report,
-            evaluation_report=str(report_path),
-        )
-        _release_accelerator_memory()
-        return report
+                execution_report = {
+                    "requested_device": requested_device,
+                    "device": evaluation.get("device"),
+                    "fallback_used": fallback_used,
+                    "fallback_reason": fallback_reason,
+                    "precision": precision["precision"],
+                }
+                tracker.mlflow.log_dict(execution_report, "evaluation/execution.json")
+
+                for split in evaluation.get("splits", ["val", "test"]):
+                    split_dir = evaluation_root / str(split)
+                    if split_dir.exists():
+                        shutil.rmtree(split_dir)
+
+                    validation_args = self._evaluation_validation_args(
+                        evaluation,
+                        split=str(split),
+                        precision=precision,
+                        output_root=evaluation_root,
+                    )
+                    print(
+                        "[evaluation] Running split="
+                        f"{split!r} on device={validation_args.get('device')} "
+                        f"batch={validation_args.get('batch')} "
+                        f"half={validation_args.get('half')}"
+                    )
+                    metrics = model.val(**validation_args)
+                    reports[str(split)] = normalize_metrics(metrics)
+                    tracker.log_metrics(reports[str(split)], prefix=f"{split}_")
+                    actual_split_dir = Path(getattr(metrics, "save_dir", split_dir))
+                    print(
+                        "[evaluation] Writing annotated samples for split="
+                        f"{split!r} into {actual_split_dir}"
+                    )
+                    annotated = self._write_annotated_evaluation_samples(
+                        model,
+                        split=str(split),
+                        split_dir=actual_split_dir,
+                        evaluation=evaluation,
+                    )
+                    curves = _move_selected(
+                        actual_split_dir,
+                        actual_split_dir / "curves",
+                        patterns={
+                            "*curve*.png",
+                            "confusion_matrix*.png",
+                            "results*.png",
+                            "results*.csv",
+                        },
+                    )
+                    artifact_reports[str(split)] = {
+                        "output_dir": str(actual_split_dir),
+                        "curves": curves,
+                        "annotated_samples": annotated,
+                    }
+                    if actual_split_dir.is_dir():
+                        tracker.mlflow.log_artifacts(
+                            str(actual_split_dir), artifact_path=f"evaluation/{split}"
+                        )
+
+                self._enforce_metric_gates(reports, evaluation.get("quality_gates", {}))
+                report = {
+                    "weights": str(source_best_weights),
+                    "evaluation_weights": str(evaluation_weights),
+                    "precision": precision_report,
+                    "pre_export": pre_export,
+                    "execution": execution_report,
+                    "dataset_fingerprint": self._dataset_manifest()[
+                        "dataset_fingerprint"
+                    ],
+                    "splits": reports,
+                    "artifacts": artifact_reports,
+                    "quality_gates": evaluation.get("quality_gates", {}),
+                    "passed": True,
+                }
+                report_path = self._write_json("reports/evaluation.json", report)
+                tracker.mlflow.log_artifact(str(report_path), artifact_path="reports")
+                return report, report_path
+            finally:
+                if model is not None:
+                    del model
+                _release_accelerator_memory()
+
+    def _evaluation_for_device(
+        self,
+        evaluation: dict[str, Any],
+        *,
+        device: Any,
+        cuda_oom_fallback: bool = False,
+    ) -> dict[str, Any]:
+        """Return an evaluation config pinned to one device.
+
+        CPU fallback intentionally disables FP16 model casting and TensorRT engine
+        pre-export because both can keep evaluation tied to CUDA memory.
+        """
+        result = copy.deepcopy(evaluation)
+        result["device"] = device
+
+        pre_export = result.get("pre_export")
+        if isinstance(pre_export, dict):
+            pre_export = dict(pre_export)
+            options = dict(pre_export.get("options") or {})
+            options["device"] = device
+            pre_export["options"] = options
+            result["pre_export"] = pre_export
+
+        if not _is_cpu_device(device):
+            return result
+
+        result["precision"] = "fp32"
+        result["half"] = False
+        result["cast_model_to_half"] = False
+        if isinstance(result.get("pre_export"), dict):
+            pre_export = result["pre_export"]
+            options = dict(pre_export.get("options") or {})
+            options["device"] = "cpu"
+            options["half"] = False
+            pre_export["options"] = options
+            if str(pre_export.get("format", "")).lower() == "engine":
+                pre_export["enabled"] = False
+                pre_export["use_for_evaluation"] = False
+                pre_export["disabled_reason"] = (
+                    "cpu_fallback_skips_tensorrt_engine_pre_export"
+                    if cuda_oom_fallback
+                    else "cpu_device_skips_tensorrt_engine_pre_export"
+                )
+        return result
 
     def export(self) -> dict[str, Any]:
         """Export only the selected best checkpoint to one or more deployment formats."""
@@ -1217,6 +1391,32 @@ def _set_evaluation_mode(model: Any) -> dict[str, Any]:
         "status": "skipped_non_torch_backend",
         "backend_type": type(module).__name__ if module is not None else None,
     }
+
+
+def _is_cpu_device(device: Any) -> bool:
+    """Return true for the explicit Ultralytics CPU device selector."""
+    return isinstance(device, str) and device.strip().lower() == "cpu"
+
+
+def _is_cuda_out_of_memory(exc: BaseException) -> bool:
+    """Detect CUDA OOM even when it is wrapped by higher-level libraries."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    messages: list[str] = []
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        try:
+            if isinstance(current, torch.cuda.OutOfMemoryError):
+                return True
+        except AttributeError:
+            pass
+        messages.append(f"{type(current).__name__}: {current}")
+        current = current.__cause__ or current.__context__
+
+    text = " ".join(messages).lower()
+    memory_signal = "out of memory" in text or "oom" in text
+    cuda_signal = "cuda" in text or "cudnn" in text or "gpu" in text
+    return memory_signal and cuda_signal
 
 
 def _quantization_bits(options: dict[str, Any]) -> int:
