@@ -29,7 +29,9 @@ from edge_ai_mass.training.tracking import normalize_uri
 from edge_ai_mass.training.visualization import create_dataset_visualizations
 from edge_ai_mass.training.yolo import (
     YOLOTrainer,
+    _is_cuda_runtime_import_error,
     _is_cuda_out_of_memory,
+    _next_smaller_evaluation_batch,
     _organize_export,
     _path_digest,
     _set_evaluation_mode,
@@ -322,6 +324,40 @@ def test_plan_checks_onnxruntime_for_evaluation_onnx_pre_export(
     assert "missing Python package: tensorrt" not in plan["blocking_issues"]
 
 
+def test_plan_reports_broken_onnxruntime_cuda_runtime_import(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import edge_ai_mass.training.pipeline as pipeline_module
+
+    config = _config(tmp_path)
+    config.payload["evaluation"] = {
+        "pre_export": {"enabled": True, "format": "onnx"}
+    }
+
+    def fake_package_status(name: str):
+        if name == "onnxruntime":
+            return {
+                "available": False,
+                "error": (
+                    "ImportError: libcudart.so.13: cannot open shared object file: "
+                    "No such file or directory"
+                ),
+            }
+        return {"available": True, "error": None}
+
+    monkeypatch.setattr(pipeline_module, "_package_status", fake_package_status)
+
+    plan = TrainingPipeline(config).plan("evaluate")
+
+    assert plan["packages"]["onnxruntime"] is False
+    assert "libcudart.so.13" in plan["package_errors"]["onnxruntime"]
+    assert any(
+        issue.startswith("broken Python package: onnxruntime:")
+        for issue in plan["blocking_issues"]
+    )
+
+
 def test_metric_normalization_exposes_stable_names():
     metrics = {"metrics/mAP50-95(M)": 0.42, "metrics/mAP50(B)": 0.71}
     normalized = normalize_metrics(metrics)
@@ -406,6 +442,58 @@ def test_cuda_oom_detection_handles_wrapped_runtime_errors():
 
     assert _is_cuda_out_of_memory(wrapped) is True
     assert _is_cuda_out_of_memory(RuntimeError("validation metric is missing")) is False
+
+
+def test_cuda_runtime_import_error_detection_handles_onnxruntime_gpu_mismatch():
+    error = ImportError(
+        "libcudart.so.13: cannot open shared object file: No such file or directory"
+    )
+    wrapped = RuntimeError("Failed to load ONNX backend")
+    wrapped.__cause__ = error
+
+    assert _is_cuda_runtime_import_error(wrapped) is True
+    assert _is_cuda_runtime_import_error(ImportError("onnxruntime missing")) is False
+
+
+def test_cuda_oom_retry_halves_batch_until_one():
+    assert _next_smaller_evaluation_batch(16) == 8
+    assert _next_smaller_evaluation_batch(3) == 2
+    assert _next_smaller_evaluation_batch(2) == 1
+    assert _next_smaller_evaluation_batch(1) == 1
+
+
+def test_gpu_evaluation_retry_updates_batch_plots_and_pre_export_options(
+    tmp_path: Path,
+):
+    config = _config(tmp_path)
+    trainer = YOLOTrainer(config, PipelineState(config.artifacts_dir / "state.json"))
+
+    retry = trainer._evaluation_for_device(
+        {
+            "precision": "fp16",
+            "batch": 16,
+            "plots": True,
+            "device": 0,
+            "pre_export": {
+                "enabled": True,
+                "format": "onnx",
+                "use_for_evaluation": True,
+                "options": {"half": True, "batch": 16, "device": 0},
+            },
+        },
+        device=0,
+        batch=8,
+        plots=False,
+    )
+
+    assert retry["device"] == 0
+    assert retry["batch"] == 8
+    assert retry["plots"] is False
+    assert retry["precision"] == "fp16"
+    assert retry["pre_export"]["enabled"] is True
+    assert retry["pre_export"]["options"]["device"] == 0
+    assert retry["pre_export"]["options"]["batch"] == 8
+    assert retry["pre_export"]["options"]["half"] is True
 
 
 def test_cpu_evaluation_fallback_disables_cuda_precision_and_engine_export(
@@ -568,6 +656,52 @@ def test_evaluation_can_pre_export_fp16_onnx_for_validation(tmp_path: Path):
     assert FakeYOLO.calls[0]["options"]["half"] is True
     assert "int8" not in FakeYOLO.calls[0]["options"]
     assert "workspace" not in FakeYOLO.calls[0]["options"]
+
+
+def test_evaluation_pre_export_cuda_runtime_error_falls_back_to_pt_weights(
+    tmp_path: Path,
+):
+    config = _config(tmp_path)
+    trainer = YOLOTrainer(config, PipelineState(config.artifacts_dir / "state.json"))
+    best = tmp_path / "best.pt"
+    best.write_bytes(b"best")
+
+    class BrokenOnnxYOLO:
+        def __init__(self, weights: str, *, task: str):
+            self.weights = weights
+            self.task = task
+
+        def export(self, *, format: str, **options):
+            raise ImportError(
+                "libcudart.so.13: cannot open shared object file: "
+                "No such file or directory"
+            )
+
+    tracker = SimpleNamespace(
+        mlflow=SimpleNamespace(log_artifacts=lambda *args, **kwargs: None)
+    )
+    report = trainer._prepare_evaluation_pre_export(
+        BrokenOnnxYOLO,
+        source_best_weights=best,
+        evaluation={
+            "precision": "fp16",
+            "batch": 1,
+            "device": 0,
+            "pre_export": {
+                "enabled": True,
+                "format": "onnx",
+                "use_for_evaluation": True,
+                "continue_on_error": False,
+                "options": {"half": True},
+            },
+        },
+        tracker=tracker,
+    )
+
+    assert report["status"] == "failed"
+    assert report["runtime_error_kind"] == "cuda_runtime_import_error"
+    assert report["use_for_evaluation"] is False
+    assert report["evaluation_weights"] is None
 
 
 def test_evaluation_precision_must_be_fp32_or_fp16(tmp_path: Path):

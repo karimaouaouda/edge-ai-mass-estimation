@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import importlib.util
 from pathlib import Path
 from typing import Any
@@ -41,16 +42,25 @@ class TrainingPipeline:
     def plan(self, stage: str = "all", *, skip_optuna: bool = False) -> dict[str, Any]:
         stages = normalize_stages(stage, skip_optuna=skip_optuna)
         sources = inspect_sources(self.config)
-        packages = {
-            "ultralytics": bool(importlib.util.find_spec("ultralytics")),
-            "mlflow": bool(importlib.util.find_spec("mlflow")),
-            "optuna": bool(importlib.util.find_spec("optuna")),
-            "dvc": bool(importlib.util.find_spec("dvc")),
-            "onnx": bool(importlib.util.find_spec("onnx")),
-            "onnxruntime": bool(importlib.util.find_spec("onnxruntime")),
-            "tensorrt": bool(importlib.util.find_spec("tensorrt")),
-            "zenml": bool(importlib.util.find_spec("zenml")),
-            "kaggle": bool(importlib.util.find_spec("kaggle")),
+        package_checks = {
+            name: _package_status(name)
+            for name in (
+                "ultralytics",
+                "mlflow",
+                "optuna",
+                "dvc",
+                "onnx",
+                "onnxruntime",
+                "tensorrt",
+                "zenml",
+                "kaggle",
+            )
+        }
+        packages = {name: status["available"] for name, status in package_checks.items()}
+        package_errors = {
+            name: status["error"]
+            for name, status in package_checks.items()
+            if status.get("error")
         }
         blocking_issues = []
         if "preprocess" in stages:
@@ -95,11 +105,15 @@ class TrainingPipeline:
                     blocking_issues.append(
                         "publish requires a reusable checkpoint/model; run train first"
                     )
-        blocking_issues.extend(
-            f"missing Python package: {name}"
-            for name in sorted(required_packages)
-            if not packages[name]
-        )
+        for name in sorted(required_packages):
+            if packages[name]:
+                continue
+            if name in package_errors:
+                blocking_issues.append(
+                    f"broken Python package: {name}: {package_errors[name]}"
+                )
+            else:
+                blocking_issues.append(f"missing Python package: {name}")
         try:
             model_source = resolve_model_source(
                 self.config,
@@ -129,6 +143,7 @@ class TrainingPipeline:
             "artifacts_dir": str(self.config.artifacts_dir),
             "sources": sources,
             "packages": packages,
+            "package_errors": package_errors,
             "ready": not blocking_issues,
             "blocking_issues": blocking_issues,
         }
@@ -226,3 +241,16 @@ class TrainingPipeline:
         elif not previous:
             self.state.data["config_digest"] = self.config.digest
             self.state.save()
+
+
+def _package_status(name: str) -> dict[str, Any]:
+    """Check dependency availability, importing fragile runtimes when needed."""
+    if importlib.util.find_spec(name) is None:
+        return {"available": False, "error": None}
+    if name != "onnxruntime":
+        return {"available": True, "error": None}
+    try:
+        importlib.import_module(name)
+    except Exception as exc:  # pragma: no cover - depends on host CUDA/runtime wheels
+        return {"available": False, "error": f"{type(exc).__name__}: {exc}"}
+    return {"available": True, "error": None}

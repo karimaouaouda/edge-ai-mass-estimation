@@ -313,35 +313,31 @@ class YOLOTrainer:
         requested_device = base_evaluation.get("device")
         if requested_device is None:
             requested_device = self.config.payload["training"].get("device", 0)
-        attempts = [
-            {
-                "device": requested_device,
-                "fallback_used": False,
-                "fallback_reason": None,
-            }
-        ]
-        if not _is_cpu_device(requested_device):
-            attempts.append(
-                {
-                    "device": "cpu",
-                    "fallback_used": True,
-                    "fallback_reason": "cuda_out_of_memory",
-                }
-            )
-
+        current_device = requested_device
+        current_batch = self._effective_evaluation_batch(base_evaluation)
+        current_plots = bool(base_evaluation.get("plots", False))
+        fallback_used = False
+        fallback_reason: str | None = None
+        attempt_number = 0
         last_error: Exception | None = None
-        for attempt_number, attempt in enumerate(attempts, start=1):
+        max_attempts = 64
+
+        while attempt_number < max_attempts:
+            attempt_number += 1
             evaluation = self._evaluation_for_device(
                 base_evaluation,
-                device=attempt["device"],
-                cuda_oom_fallback=bool(attempt["fallback_used"]),
+                device=current_device,
+                batch=current_batch,
+                plots=current_plots,
+                cuda_oom_fallback=fallback_reason == "cuda_out_of_memory_cpu",
             )
             precision = self._evaluation_precision_config(evaluation)
             print(
                 "[evaluation] Attempt "
-                f"{attempt_number}/{len(attempts)} starting on device="
+                f"{attempt_number} starting on device="
                 f"{evaluation.get('device')} precision={precision['precision']} "
-                f"fallback_used={attempt['fallback_used']}"
+                f"batch={evaluation.get('batch')} plots={evaluation.get('plots')} "
+                f"strategy={fallback_reason or 'configured'}"
             )
             try:
                 report, report_path = self._evaluate_once(
@@ -350,34 +346,87 @@ class YOLOTrainer:
                     precision=precision,
                     source_best_weights=source_best_weights,
                     requested_device=requested_device,
-                    fallback_used=bool(attempt["fallback_used"]),
-                    fallback_reason=attempt["fallback_reason"],
+                    fallback_used=fallback_used,
+                    fallback_reason=fallback_reason,
                 )
             except Exception as exc:
                 last_error = exc
                 if (
-                    attempt_number == 1
-                    and len(attempts) > 1
-                    and _is_cuda_out_of_memory(exc)
+                    _is_cuda_runtime_import_error(exc)
+                    and self._evaluation_pre_export_enabled(base_evaluation)
                 ):
                     print(
+                        "[evaluation] CUDA runtime import error detected while using "
+                        "the evaluation pre-export backend. This usually means an "
+                        "ONNXRuntime/TensorRT GPU package expects CUDA libraries that "
+                        "are not installed in this runtime."
+                    )
+                    print(f"[evaluation] Original error: {type(exc).__name__}: {exc}")
+                    print(
+                        "[evaluation] Disabling evaluation pre-export and retrying "
+                        "with the original PyTorch weights."
+                    )
+                    logger.warning(
+                        "Evaluation pre-export backend is incompatible with the CUDA "
+                        "runtime; retrying with PyTorch weights. Error: %s",
+                        exc,
+                    )
+                    base_evaluation = self._evaluation_without_pre_export(
+                        base_evaluation,
+                        reason="cuda_runtime_import_error",
+                    )
+                    self._remove_partial_evaluation_pre_exports()
+                    _release_accelerator_memory()
+                    fallback_used = True
+                    fallback_reason = "cuda_runtime_import_disable_pre_export"
+                    continue
+                if _is_cuda_out_of_memory(exc) and not _is_cpu_device(current_device):
+                    print(
                         "[evaluation] CUDA out-of-memory detected during evaluation. "
-                        "Clearing accelerator memory and retrying the full evaluation "
-                        "on CPU."
+                        "Applying the next memory-saving retry step."
                     )
                     print(f"[evaluation] Original error: {type(exc).__name__}: {exc}")
                     logger.warning(
-                        "CUDA OOM during evaluation; retrying on CPU. Error: %s",
+                        "CUDA OOM during evaluation attempt %s; retrying with a "
+                        "lower-memory strategy. Error: %s",
+                        attempt_number,
                         exc,
                     )
-                    pre_export_root = self.artifacts_dir / "evaluation" / "pre_export"
-                    if pre_export_root.exists():
-                        shutil.rmtree(pre_export_root)
-                        print(
-                            "[evaluation] Removed partial GPU pre-export artifacts: "
-                            f"{pre_export_root}"
-                        )
+                    self._remove_partial_evaluation_pre_exports()
                     _release_accelerator_memory()
+
+                    if current_batch > 1:
+                        next_batch = _next_smaller_evaluation_batch(current_batch)
+                        print(
+                            "[evaluation] Retrying on GPU with a smaller batch: "
+                            f"{current_batch} -> {next_batch}."
+                        )
+                        current_batch = next_batch
+                        fallback_used = True
+                        fallback_reason = (
+                            f"cuda_out_of_memory_reduce_batch_to_{next_batch}"
+                        )
+                        continue
+
+                    if current_plots:
+                        print(
+                            "[evaluation] Batch is already 1. Disabling validation "
+                            "plots and retrying on GPU."
+                        )
+                        current_plots = False
+                        fallback_used = True
+                        fallback_reason = "cuda_out_of_memory_disable_plots"
+                        continue
+
+                    print(
+                        "[evaluation] GPU still ran out of memory at batch=1 with "
+                        "plots disabled. Retrying the full evaluation on CPU."
+                    )
+                    current_device = "cpu"
+                    current_batch = 1
+                    current_plots = False
+                    fallback_used = True
+                    fallback_reason = "cuda_out_of_memory_cpu"
                     continue
                 _release_accelerator_memory()
                 raise
@@ -388,15 +437,22 @@ class YOLOTrainer:
                 evaluation_report=str(report_path),
             )
             _release_accelerator_memory()
-            if attempt["fallback_used"]:
+            if fallback_reason == "cuda_out_of_memory_cpu":
                 print("[evaluation] CPU fallback evaluation completed successfully.")
+            elif fallback_used:
+                print(
+                    "[evaluation] Evaluation completed successfully after CUDA OOM "
+                    f"mitigation: {fallback_reason}."
+                )
             else:
                 print("[evaluation] Evaluation completed successfully.")
             return report
 
         if last_error is not None:
             raise last_error
-        raise RuntimeError("Evaluation failed without an exception to report.")
+        raise RuntimeError(
+            f"Evaluation exceeded the retry limit ({max_attempts}) without completing."
+        )
 
     def _evaluate_once(
         self,
@@ -448,6 +504,8 @@ class YOLOTrainer:
                 execution_report = {
                     "requested_device": requested_device,
                     "device": evaluation.get("device"),
+                    "batch": self._effective_evaluation_batch(evaluation),
+                    "plots": bool(evaluation.get("plots", False)),
                     "fallback_used": fallback_used,
                     "fallback_reason": fallback_reason,
                     "precision": precision["precision"],
@@ -533,6 +591,8 @@ class YOLOTrainer:
         evaluation: dict[str, Any],
         *,
         device: Any,
+        batch: int | None = None,
+        plots: bool | None = None,
         cuda_oom_fallback: bool = False,
     ) -> dict[str, Any]:
         """Return an evaluation config pinned to one device.
@@ -542,12 +602,18 @@ class YOLOTrainer:
         """
         result = copy.deepcopy(evaluation)
         result["device"] = device
+        if batch is not None:
+            result["batch"] = int(batch)
+        if plots is not None:
+            result["plots"] = bool(plots)
 
         pre_export = result.get("pre_export")
         if isinstance(pre_export, dict):
             pre_export = dict(pre_export)
             options = dict(pre_export.get("options") or {})
             options["device"] = device
+            if batch is not None:
+                options["batch"] = int(batch)
             pre_export["options"] = options
             result["pre_export"] = pre_export
 
@@ -557,11 +623,14 @@ class YOLOTrainer:
         result["precision"] = "fp32"
         result["half"] = False
         result["cast_model_to_half"] = False
+        result["batch"] = 1 if batch is None else int(batch)
+        result["plots"] = False if plots is None else bool(plots)
         if isinstance(result.get("pre_export"), dict):
             pre_export = result["pre_export"]
             options = dict(pre_export.get("options") or {})
             options["device"] = "cpu"
             options["half"] = False
+            options["batch"] = int(result["batch"])
             pre_export["options"] = options
             if str(pre_export.get("format", "")).lower() == "engine":
                 pre_export["enabled"] = False
@@ -571,6 +640,50 @@ class YOLOTrainer:
                     if cuda_oom_fallback
                     else "cpu_device_skips_tensorrt_engine_pre_export"
                 )
+        return result
+
+    def _effective_evaluation_batch(self, evaluation: dict[str, Any]) -> int:
+        """Resolve evaluation batch to a positive integer for retry decisions."""
+        value = evaluation.get("batch")
+        if value is None:
+            value = self.config.payload["training"].get("batch", 16)
+        try:
+            return max(1, int(value))
+        except (TypeError, ValueError):
+            logger.warning(
+                "Evaluation batch=%r is not an integer; using batch=1 for safe retry.",
+                value,
+            )
+            return 1
+
+    def _remove_partial_evaluation_pre_exports(self) -> None:
+        """Remove partial optimized backends before retrying after CUDA OOM."""
+        pre_export_root = self.artifacts_dir / "evaluation" / "pre_export"
+        if pre_export_root.exists():
+            shutil.rmtree(pre_export_root)
+            print(
+                "[evaluation] Removed partial evaluation pre-export artifacts: "
+                f"{pre_export_root}"
+            )
+
+    def _evaluation_pre_export_enabled(self, evaluation: dict[str, Any]) -> bool:
+        """Return true when evaluation is currently trying an optimized backend."""
+        pre_export = evaluation.get("pre_export") or {}
+        return bool(pre_export.get("enabled", False))
+
+    def _evaluation_without_pre_export(
+        self,
+        evaluation: dict[str, Any],
+        *,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Disable evaluation pre-export while preserving the rest of the config."""
+        result = copy.deepcopy(evaluation)
+        pre_export = dict(result.get("pre_export") or {})
+        pre_export["enabled"] = False
+        pre_export["use_for_evaluation"] = False
+        pre_export["disabled_reason"] = reason
+        result["pre_export"] = pre_export
         return result
 
     def export(self) -> dict[str, Any]:
@@ -954,7 +1067,7 @@ class YOLOTrainer:
         options = self._evaluation_pre_export_options(
             export_format,
             evaluation=evaluation,
-            configured_options=dict(pre_export.get("options", {})),
+            configured_options=dict(pre_export.get("options") or {}),
         )
         options.setdefault(
             "imgsz",
@@ -1023,9 +1136,25 @@ class YOLOTrainer:
                 "status": "failed",
                 "quantization_bits": _quantization_bits(options),
                 "options": options,
+                "use_for_evaluation": False,
                 "evaluation_weights": None,
                 "error": f"{type(exc).__name__}: {exc}",
             }
+            if _is_cuda_runtime_import_error(exc):
+                result["runtime_error_kind"] = "cuda_runtime_import_error"
+                result["disabled_reason"] = (
+                    "pre_export_backend_requires_missing_cuda_runtime"
+                )
+                print(
+                    "[evaluation] Evaluation pre-export failed because the optimized "
+                    "backend requires CUDA runtime libraries that are not available. "
+                    "Skipping pre-export and using PyTorch weights."
+                )
+                logger.warning(
+                    "Evaluation pre-export skipped due to CUDA runtime import error: %s",
+                    exc,
+                )
+                return result
             if continue_on_error:
                 logger.warning("Evaluation pre-export failed and will be skipped: %s", exc)
                 return result
@@ -1396,6 +1525,51 @@ def _set_evaluation_mode(model: Any) -> dict[str, Any]:
 def _is_cpu_device(device: Any) -> bool:
     """Return true for the explicit Ultralytics CPU device selector."""
     return isinstance(device, str) and device.strip().lower() == "cpu"
+
+
+def _next_smaller_evaluation_batch(batch: int) -> int:
+    """Halve an evaluation batch conservatively while still reaching batch 1."""
+    if batch <= 1:
+        return 1
+    return max(1, math.ceil(batch / 2))
+
+
+def _is_cuda_runtime_import_error(exc: BaseException) -> bool:
+    """Detect CUDA shared-library import failures from optional GPU backends."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    messages: list[str] = []
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        messages.append(f"{type(current).__name__}: {current}")
+        current = current.__cause__ or current.__context__
+
+    text = " ".join(messages).lower()
+    missing_library = any(
+        token in text
+        for token in (
+            "cannot open shared object file",
+            "could not load library",
+            "failed to load",
+            "dll load failed",
+        )
+    )
+    cuda_library = any(
+        token in text
+        for token in (
+            "libcudart",
+            "libcublas",
+            "libcufft",
+            "libcurand",
+            "libcusolver",
+            "libcusparse",
+            "libcudnn",
+            "cudnn",
+            "cuda runtime",
+            "onnxruntime_pybind11_state",
+        )
+    )
+    return missing_library and cuda_library
 
 
 def _is_cuda_out_of_memory(exc: BaseException) -> bool:

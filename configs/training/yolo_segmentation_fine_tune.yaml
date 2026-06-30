@@ -271,7 +271,7 @@ evaluation:
     enabled: ${EVALUATION_PRE_EXPORT_ENABLED:false}
     format: ${EVALUATION_PRE_EXPORT_FORMAT:onnx}
     use_for_evaluation: ${EVALUATION_USE_PRE_EXPORT_FOR_EVAL:false}
-    continue_on_error: false
+    continue_on_error: true
     options:
       opset: 17
       half: true
