@@ -267,7 +267,7 @@ tuning:
 evaluation:
   splits: [val, test]
   imgsz: 640
-  batch: 2
+  batch: 1
   device: 0
   # fp16 halves model parameter bytes during evaluation on CUDA-capable devices.
   # Set fp32 for exact baseline comparisons or CPU-only validation.

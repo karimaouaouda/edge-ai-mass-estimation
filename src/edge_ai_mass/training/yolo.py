@@ -433,6 +433,7 @@ class YOLOTrainer:
                     options["data"] = str(self.config.dataset_dir / "dataset.yaml")
                 model = YOLO(str(best_weights), task=self.config.payload["model"]["task"])
                 try:
+                    print(f"exporting : {export_format} with options: {options}")
                     exported_value = model.export(format=export_format, **options)
                     exported_paths = _normalize_export_paths(exported_value)
                     organized_paths = [
