@@ -1,8 +1,10 @@
-# Governed residual mass-estimation pipeline.
-# The model learns a correction to a physics estimate:
-#   mass_base_g = estimated_volume_m3 * effective_density_kg_m3 * 1000
-#   residual_g = real_mass_g - mass_base_g
-#   predicted_mass_g = mass_base_g + predicted_residual_g
+# Governed residual mass-estimation pipeline for the object-feature dataset in
+# mass_model/mass_dataset/features/mass_estimation_features.csv.
+#
+# Hybrid formula:
+#   mass_base_g = selected_volume_cm3 * effective_density_g_cm3
+#   correction_g = real_mass_g - mass_base_g
+#   predicted_mass_g = mass_base_g + predicted_correction_g
 
 project:
   name: edge-ai-mass-estimation
@@ -10,25 +12,25 @@ project:
   pipeline: mass_estimation
   model_stage: mass
 
+# Mass training is intentionally native-only. ZenML remains available for the
+# YOLO pipeline, but the mass pipeline currently writes local thesis artifacts
+# directly and does not enter a ZenML DAG.
 orchestration:
   zenml:
-    enabled: true
-    pipeline_name: edge_ai_mass_mass_estimation
+    enabled: false
 
 data:
-  # CSV, JSON/JSONL, or Parquet object-level measurements. Required canonical
-  # fields after column mapping are sample_id, class_name, and real_mass_g.
-  measurements: ${MASS_MEASUREMENTS:data/raw/mass_measurements.csv}
+  measurements: ${MASS_MEASUREMENTS:mass_dataset/features/mass_estimation_features.csv}
   output_dir: ${MASS_DATASET_OUTPUT:data/processed/mass_estimation}
   columns:
-    sample_id: sample_id
+    sample_id: object_id
     object_id: object_id
-    class_name: class_name
+    class_name: class
     real_mass_g: real_mass_g
     material: material
-    volume: estimated_volume_m3
-    volume_unit: m3
-    density: effective_density_kg_m3
+    volume: selected_volume_cm3
+    volume_unit: cm3
+    density: effective_density_g_cm3
   material:
     default_material: other
     class_to_material:
@@ -40,21 +42,38 @@ data:
       glass: glass
       paper_cardboard: cardboard
       mixed_waste: other
+      textile_trash: textile
+      vegetation: organic
     density_priors_kg_m3:
       plastic: 40.0
       glass: 300.0
       metal: 160.0
       paper: 90.0
-      cardboard: 60.0
+      cardboard: 55.0
       organic: 500.0
       textile: 120.0
       wood: 250.0
       other: 100.0
+  outliers:
+    enabled: true
+    # Do not silently delete thesis samples. Flag unusual points and reduce
+    # their training influence; reports keep the exact bounds and reasons.
+    action: flag_and_downweight
+    method: iqr
+    iqr_multiplier: 3.0
+    min_group_size: 8
+    group_column: class_name
+    columns:
+      - real_mass_g
+      - mass_base_g
+      - correction_g
+      - selected_volume_cm3
+      - mask_area_cm2
+      - estimated_thickness_cm
+    sample_weight_column: sample_weight
+    outlier_weight: 0.35
   optional_inputs:
-    detections: ${MASS_DETECTIONS:}
-    masks: ${MASS_MASKS:}
-    depth_features: ${MASS_DEPTH_FEATURES:}
-    calibration: ${MASS_CALIBRATION:}
+    depth_maps: mass_model/mass_dataset/depth_maps
 
 features:
   output_format: csv
@@ -63,38 +82,77 @@ features:
   categorical_columns:
     - class_name
     - material
+    - dimension_source
+    - thickness_source
+    - volume_source
+    - baseline_method
   numeric_columns:
-    - estimated_volume_m3
+    - hollow_prior
+    - effective_density_g_cm3
     - effective_density_kg_m3
-    - mass_base_g
+    - cm_per_pixel_x
+    - cm_per_pixel_y
+    - pixel_area_cm2
+    - mask_area_px
+    - mask_area_cm2
     - bbox_width_px
     - bbox_height_px
+    - bbox_width_cm
+    - bbox_height_cm
     - bbox_area_px
-    - mask_area_px
-    - projected_area_m2
+    - bbox_area_cm2
     - aspect_ratio
+    - perimeter_px
+    - perimeter_cm
+    - convex_hull_area_px
+    - convex_hull_area_cm2
     - solidity
     - extent
     - compactness
-    - depth_mean_m
-    - depth_median_m
-    - depth_std_m
-    - depth_min_m
-    - depth_max_m
-    - estimated_thickness_m
+    - circularity
+    - depth_mean
+    - depth_median
+    - depth_std
+    - depth_min
+    - depth_max
+    - depth_range
+    - depth_p10
+    - depth_p90
+    - depth_iqr
     - depth_valid_ratio
-    - detection_confidence
-    - mask_confidence
-  auto_include_numeric: true
+    - background_depth_raw
+    - object_to_background_depth_ratio
+    - estimated_thickness_cm
+    - table_depth_cm
+    - object_depth_cm
+    - thickness_prior_cm
+    - volume_box_cm3
+    - volume_mask_cm3
+    - volume_depth_cm3
+    - selected_volume_cm3
+    - estimated_volume_m3
+    - mass_base_g
+    - label_confidence
+  auto_include_numeric: false
   strict_columns: false
   exclude_columns:
     - real_mass_g
-    - measured_mass_g
     - correction_g
     - residual_g
     - residual_target_g
+    - predicted_correction_g
+    - mass_pred_g
+    - predicted_mass_g
+    - baseline_error_g
+    - abs_baseline_error_g
+    - baseline_relative_error
+    - sample_weight
+    - mass_label_type
+    - source_dataset
 
 split:
+  use_existing: true
+  split_column: split
   train: 0.70
   val: 0.15
   test: 0.15
@@ -126,15 +184,82 @@ model:
       type: random_forest
       enabled: true
       params:
-        n_estimators: 200
-        max_depth: 6
+        n_estimators: 300
+        max_depth: 8
         min_samples_leaf: 3
         n_jobs: -1
+    - name: extra_trees_residual
+      type: extra_trees
+      enabled: true
+      params:
+        n_estimators: 400
+        max_depth: 10
+        min_samples_leaf: 2
+        n_jobs: -1
+    - name: gradient_boosting_residual
+      type: gradient_boosting
+      enabled: true
+      params:
+        n_estimators: 250
+        learning_rate: 0.04
+        max_depth: 3
+        min_samples_leaf: 3
+        subsample: 0.85
+    - name: hist_gradient_boosting_residual
+      type: hist_gradient_boosting
+      enabled: true
+      params:
+        max_iter: 250
+        learning_rate: 0.04
+        max_leaf_nodes: 31
+        min_samples_leaf: 8
+        l2_regularization: 0.01
+        early_stopping: false
+    # External boosted-tree engines. They are present in the candidate list for
+    # experiments, but default to disabled unless the optional packages are
+    # installed. Enable with:
+    #   $env:MASS_ENABLE_XGBOOST = 'true'
+    #   $env:MASS_ENABLE_LIGHTGBM = 'true'
+    - name: xgboost_residual
+      type: xgboost
+      enabled: ${MASS_ENABLE_XGBOOST:true}
+      params:
+        n_estimators: 350
+        max_depth: 3
+        learning_rate: 0.04
+        subsample: 0.85
+        colsample_bytree: 0.85
+        min_child_weight: 2.0
+        reg_lambda: 2.0
+    - name: lightgbm_residual
+      type: lightgbm
+      enabled: ${MASS_ENABLE_LIGHTGBM:true}
+      params:
+        n_estimators: 350
+        learning_rate: 0.04
+        num_leaves: 31
+        min_child_samples: 8
+        subsample: 0.85
+        colsample_bytree: 0.85
+        reg_lambda: 2.0
+    - name: mlp_residual
+      type: mlp
+      enabled: false
+      params:
+        hidden_layer_sizes: [64, 32]
+        alpha: 0.001
+        learning_rate_init: 0.001
 
 training:
-  run_name: mass-residual-regression
+  run_name: mass-model-feature-residuals
   artifacts_dir: ${MASS_ARTIFACTS:artifacts/mass_estimation}
   seed: 42
+  # compare_candidates trains every enabled candidate and chooses the best.
+  # Set mode: single and single_model: ridge_residual to train one model only.
+  mode: compare_candidates
+  single_model: ridge_residual
+  use_sample_weight: true
+  sample_weight_column: sample_weight
   selection:
     split: val
     metric: hybrid.mae_g
@@ -146,7 +271,7 @@ evaluation:
   plots: true
 
 tracking:
-  enabled: true
+  enabled: false
   uri: ${MLFLOW_TRACKING_URI:sqlite:///artifacts/mlflow/mlflow.db}
   registry_uri: ${MLFLOW_REGISTRY_URI:sqlite:///artifacts/mlflow/mlflow.db}
   experiment: ${MLFLOW_EXPERIMENT_NAME:edge-ai-mass-residual-mass}
@@ -155,7 +280,7 @@ tracking:
     owner: mlops
     thesis_stage: mass_estimation
   registry:
-    enabled: true
+    enabled: false
     name: edge-ai-mass-residual-mass
     alias: candidate
     artifact_path: model

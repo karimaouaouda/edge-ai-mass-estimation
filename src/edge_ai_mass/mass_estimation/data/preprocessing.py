@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from edge_ai_mass.mass_estimation.config import (
@@ -36,6 +35,7 @@ def preprocess_mass_dataset(config: MassEstimationConfig) -> dict[str, Any]:
     df = read_table(source_path)
     original_columns = list(df.columns)
     df = _standardize_columns(df, data_cfg.get("columns", {}))
+    df = _ensure_identity_columns(df)
     required = ["sample_id", "class_name", "real_mass_g"]
     _require_columns(df, required, context="mass measurement input")
 
@@ -87,6 +87,10 @@ def preprocess_mass_dataset(config: MassEstimationConfig) -> dict[str, Any]:
             for key, value in material_cfg.get("density_priors_kg_m3", {}).items()
         },
     }
+    if "effective_density_g_cm3" in df.columns and "effective_density_kg_m3" not in df.columns:
+        df["effective_density_kg_m3"] = pd.to_numeric(
+            df["effective_density_g_cm3"], errors="coerce"
+        ) * 1000.0
     if "effective_density_kg_m3" not in df.columns:
         df["effective_density_kg_m3"] = df["material"].map(
             lambda value: densities.get(str(value), densities["other"])
@@ -100,10 +104,16 @@ def preprocess_mass_dataset(config: MassEstimationConfig) -> dict[str, Any]:
             df.loc[missing_density, "effective_density_kg_m3"] = df.loc[
                 missing_density, "material"
             ].map(lambda value: densities.get(str(value), densities["other"]))
+    if "effective_density_g_cm3" not in df.columns:
+        df["effective_density_g_cm3"] = df["effective_density_kg_m3"] / 1000.0
 
     volume_column = data_cfg.get("columns", {}).get("volume", "estimated_volume_m3")
     if volume_column in df.columns and "estimated_volume_m3" not in df.columns:
         df["estimated_volume_m3"] = df[volume_column]
+    if "selected_volume_cm3" in df.columns and "estimated_volume_m3" not in df.columns:
+        df["estimated_volume_m3"] = pd.to_numeric(
+            df["selected_volume_cm3"], errors="coerce"
+        ) * 1e-6
     if "estimated_volume_m3" in df.columns:
         df["estimated_volume_m3"] = pd.to_numeric(
             df["estimated_volume_m3"], errors="coerce"
@@ -113,10 +123,26 @@ def preprocess_mass_dataset(config: MassEstimationConfig) -> dict[str, Any]:
             unit=str(data_cfg.get("columns", {}).get("volume_unit", "m3")),
         )
 
-    if {"estimated_volume_m3", "effective_density_kg_m3"} <= set(df.columns):
+    if "mass_base_g" not in df.columns and {
+        "selected_volume_cm3",
+        "effective_density_g_cm3",
+    } <= set(df.columns):
+        df["mass_base_g"] = (
+            pd.to_numeric(df["selected_volume_cm3"], errors="coerce")
+            * pd.to_numeric(df["effective_density_g_cm3"], errors="coerce")
+        )
+    if "mass_base_g" not in df.columns and {
+        "estimated_volume_m3",
+        "effective_density_kg_m3",
+    } <= set(df.columns):
         df["mass_base_g"] = (
             df["estimated_volume_m3"] * df["effective_density_kg_m3"] * 1000.0
         )
+    if "mass_base_g" in df.columns:
+        df["mass_base_g"] = pd.to_numeric(df["mass_base_g"], errors="coerce")
+        df["correction_g"] = df["real_mass_g"] - df["mass_base_g"]
+
+    outlier_report = _handle_outliers(df, data_cfg.get("outliers", {}))
 
     optional_inputs = _inspect_optional_inputs(config, data_cfg.get("optional_inputs", {}))
     output_path = config.processed_dir / "preprocessed_objects.csv"
@@ -142,6 +168,7 @@ def preprocess_mass_dataset(config: MassEstimationConfig) -> dict[str, Any]:
         "processed_columns": list(df.columns),
         "generated_object_ids": generated_object_ids,
         "optional_inputs": optional_inputs,
+        "outliers": outlier_report,
         "feature_readiness": readiness,
         "dataset_fingerprint": dataframe_fingerprint(df),
         "data_config_digest": config.data_digest,
@@ -153,17 +180,54 @@ def preprocess_mass_dataset(config: MassEstimationConfig) -> dict[str, Any]:
 
 def _standardize_columns(df: Any, mapping: dict[str, str]) -> Any:
     rename: dict[str, str] = {}
+    source_counts: dict[str, int] = {}
+    for canonical, source in mapping.items():
+        if canonical == "volume_unit":
+            continue
+        source_name = str(source)
+        if source_name in df.columns:
+            source_counts[source_name] = source_counts.get(source_name, 0) + 1
+
     for canonical, source in mapping.items():
         if canonical == "volume_unit":
             continue
         target = {
-            "volume": "estimated_volume_m3",
-            "density": "effective_density_kg_m3",
+            "class": "class_name",
+            "volume": (
+                "selected_volume_cm3"
+                if "cm3" in str(source).lower()
+                else "estimated_volume_m3"
+            ),
+            "density": (
+                "effective_density_g_cm3"
+                if "g_cm3" in str(source).lower()
+                else "effective_density_kg_m3"
+            ),
         }.get(canonical, canonical)
         source_name = str(source)
         if source_name in df.columns and target not in df.columns:
-            rename[source_name] = target
-    return df.rename(columns=rename)
+            if source_counts.get(source_name, 0) > 1:
+                df[target] = df[source_name]
+            else:
+                rename[source_name] = target
+    if rename:
+        df = df.rename(columns=rename)
+    return df
+
+
+def _ensure_identity_columns(df: Any) -> Any:
+    if "class_name" not in df.columns and "class" in df.columns:
+        df = df.rename(columns={"class": "class_name"})
+    if "sample_id" not in df.columns:
+        if "object_id" in df.columns:
+            df["sample_id"] = df["object_id"]
+        elif {"image_id", "annotation_id"} <= set(df.columns):
+            df["sample_id"] = (
+                df["image_id"].astype(str) + "_ann_" + df["annotation_id"].astype(str)
+            )
+        elif "image_id" in df.columns:
+            df["sample_id"] = df["image_id"]
+    return df
 
 
 def _require_columns(df: Any, columns: list[str], *, context: str) -> None:
@@ -200,3 +264,107 @@ def _inspect_optional_inputs(
             "kind": "directory" if path.is_dir() else "file" if path.is_file() else "missing",
         }
     return report
+
+
+def _handle_outliers(df: Any, outlier_cfg: dict[str, Any]) -> dict[str, Any]:
+    """Flag and optionally downweight/drop outliers with robust class-wise fences."""
+
+    if not bool(outlier_cfg.get("enabled", False)):
+        df["is_outlier"] = False
+        df["outlier_reason"] = ""
+        return {"enabled": False, "rows_flagged": 0, "action": "none"}
+
+    pd = __import__("pandas")
+    action = str(outlier_cfg.get("action", "flag_and_downweight"))
+    if action not in {"flag", "flag_and_downweight", "drop"}:
+        raise MassEstimationConfigError(
+            "data.outliers.action must be flag, flag_and_downweight, or drop"
+        )
+    group_column = str(outlier_cfg.get("group_column", "class_name"))
+    group_columns = [group_column] if group_column in df.columns else [None]
+    columns = [
+        str(column)
+        for column in outlier_cfg.get(
+            "columns",
+            ["real_mass_g", "mass_base_g", "correction_g", "selected_volume_cm3"],
+        )
+        if str(column) in df.columns
+    ]
+    multiplier = float(outlier_cfg.get("iqr_multiplier", 3.0))
+    min_group_size = int(outlier_cfg.get("min_group_size", 8))
+    sample_weight_column = str(outlier_cfg.get("sample_weight_column", "sample_weight"))
+    outlier_weight = float(outlier_cfg.get("outlier_weight", 0.35))
+    if sample_weight_column not in df.columns:
+        df[sample_weight_column] = 1.0
+    df[sample_weight_column] = pd.to_numeric(
+        df[sample_weight_column], errors="coerce"
+    ).fillna(1.0)
+    df["is_outlier"] = False
+    df["outlier_reason"] = ""
+
+    bounds_report: list[dict[str, Any]] = []
+    for column in columns:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+        grouped = (
+            df.groupby(group_column, dropna=False)
+            if group_columns[0] is not None
+            else [(None, df)]
+        )
+        for group_value, subset in grouped:
+            values = subset[column].dropna()
+            if len(values) < min_group_size:
+                continue
+            q1 = float(values.quantile(0.25))
+            q3 = float(values.quantile(0.75))
+            iqr = q3 - q1
+            if iqr <= 0:
+                median = float(values.median())
+                mad = float((values - median).abs().median())
+                if mad <= 0:
+                    continue
+                lower = median - (multiplier * 1.4826 * mad)
+                upper = median + (multiplier * 1.4826 * mad)
+                method = "mad"
+            else:
+                lower = q1 - multiplier * iqr
+                upper = q3 + multiplier * iqr
+                method = "iqr"
+            mask = subset[column].lt(lower) | subset[column].gt(upper)
+            flagged_index = subset.index[mask.fillna(False)]
+            if len(flagged_index) == 0:
+                continue
+            reason = f"{column}:{method}[{lower:.4g},{upper:.4g}]"
+            existing = df.loc[flagged_index, "outlier_reason"].astype(str)
+            separator = existing.where(existing == "", existing + ";")
+            df.loc[flagged_index, "outlier_reason"] = separator + reason
+            df.loc[flagged_index, "is_outlier"] = True
+            bounds_report.append(
+                {
+                    "column": column,
+                    "group": None if group_value is None else str(group_value),
+                    "method": method,
+                    "lower": lower,
+                    "upper": upper,
+                    "flagged": int(len(flagged_index)),
+                }
+            )
+
+    flagged = df["is_outlier"].fillna(False)
+    if action == "flag_and_downweight":
+        df.loc[flagged, sample_weight_column] = (
+            df.loc[flagged, sample_weight_column] * outlier_weight
+        )
+    elif action == "drop":
+        df.drop(index=df.index[flagged], inplace=True)
+
+    return {
+        "enabled": True,
+        "action": action,
+        "columns": columns,
+        "group_column": group_column if group_columns[0] is not None else None,
+        "rows_flagged": int(flagged.sum()),
+        "rows_after_action": int(len(df)),
+        "sample_weight_column": sample_weight_column,
+        "outlier_weight": outlier_weight if action == "flag_and_downweight" else None,
+        "bounds": bounds_report,
+    }

@@ -9,6 +9,7 @@ from typing import Any
 
 from edge_ai_mass.training.checkpoints import resolve_model_source, resume_target_epochs
 from edge_ai_mass.training.config import TrainingConfig, normalize_stages
+from edge_ai_mass.training.devices import requires_torch_directml
 from edge_ai_mass.training.preprocessing import build_yolo_dataset, inspect_sources
 from edge_ai_mass.training.publication import TrainingOutputPublisher
 from edge_ai_mass.training.state import PipelineState
@@ -48,6 +49,7 @@ class TrainingPipeline:
                 "ultralytics",
                 "mlflow",
                 "optuna",
+                "torch-directml",
                 "dvc",
                 "onnx",
                 "onnxruntime",
@@ -73,9 +75,21 @@ class TrainingPipeline:
             required_packages.update({"ultralytics", "mlflow"})
         if "tune" in stages:
             required_packages.add("optuna")
+        training_device = self.config.payload.get("training", {}).get("device", 0)
         evaluation = self.config.payload.get("evaluation", {})
+        evaluation_device = evaluation.get("device", training_device)
+        if set(stages).intersection({"tune", "train"}) and requires_torch_directml(
+            training_device
+        ):
+            required_packages.add("torch-directml")
+        if "evaluate" in stages and requires_torch_directml(evaluation_device):
+            required_packages.add("torch-directml")
         pre_export = evaluation.get("pre_export", {})
-        if "evaluate" in stages and pre_export.get("enabled", False):
+        if (
+            "evaluate" in stages
+            and pre_export.get("enabled", False)
+            and not requires_torch_directml(evaluation_device)
+        ):
             pre_export_format = str(pre_export.get("format", "engine")).lower()
             if pre_export_format == "engine":
                 required_packages.add("tensorrt")
@@ -245,12 +259,13 @@ class TrainingPipeline:
 
 def _package_status(name: str) -> dict[str, Any]:
     """Check dependency availability, importing fragile runtimes when needed."""
-    if importlib.util.find_spec(name) is None:
+    import_name = {"torch-directml": "torch_directml"}.get(name, name)
+    if importlib.util.find_spec(import_name) is None:
         return {"available": False, "error": None}
-    if name != "onnxruntime":
+    if name not in {"onnxruntime", "torch-directml"}:
         return {"available": True, "error": None}
     try:
-        importlib.import_module(name)
+        importlib.import_module(import_name)
     except Exception as exc:  # pragma: no cover - depends on host CUDA/runtime wheels
         return {"available": False, "error": f"{type(exc).__name__}: {exc}"}
     return {"available": True, "error": None}

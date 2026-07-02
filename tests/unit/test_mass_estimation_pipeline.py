@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 
 import pytest
@@ -162,6 +163,52 @@ def test_mass_pipeline_runs_end_to_end_on_synthetic_dataset(tmp_path: Path):
     assert "mass_base_g" in schema["feature_columns"]
 
 
+def test_preprocess_preserves_object_id_when_used_as_sample_id(tmp_path: Path):
+    import pandas as pd
+
+    measurements = tmp_path / "object_only_features.csv"
+    pd.DataFrame(
+        [
+            {
+                "object_id": "obj-a",
+                "class": "plastic_bottle",
+                "material": "plastic",
+                "selected_volume_cm3": 50.0,
+                "effective_density_g_cm3": 0.04,
+                "real_mass_g": 8.0,
+            },
+            {
+                "object_id": "obj-b",
+                "class": "metal_can",
+                "material": "metal",
+                "selected_volume_cm3": 30.0,
+                "effective_density_g_cm3": 0.16,
+                "real_mass_g": 12.0,
+            },
+        ]
+    ).to_csv(measurements, index=False)
+    config = _config(tmp_path)
+    config.payload["data"]["measurements"] = str(measurements)
+    config.payload["data"]["columns"].update(
+        {
+            "sample_id": "object_id",
+            "object_id": "object_id",
+            "class_name": "class",
+            "volume": "selected_volume_cm3",
+            "volume_unit": "cm3",
+            "density": "effective_density_g_cm3",
+        }
+    )
+
+    result = MassEstimationPipeline(config).run_native("preprocess")
+    processed = pd.read_csv(config.processed_dir / "preprocessed_objects.csv")
+
+    assert result["preprocess"]["generated_object_ids"] is False
+    assert processed["sample_id"].tolist() == ["obj-a", "obj-b"]
+    assert processed["object_id"].tolist() == ["obj-a", "obj-b"]
+    assert processed["mass_base_g"].tolist() == pytest.approx([2.0, 4.8])
+
+
 def test_split_keeps_object_groups_disjoint(tmp_path: Path):
     config = _config(tmp_path)
     pipeline = MassEstimationPipeline(config)
@@ -186,3 +233,89 @@ def test_saved_residual_model_loads_and_predicts(tmp_path: Path):
 
     assert len(predictions) == len(frame)
     assert predictions.dtype.kind == "f"
+
+
+def test_lightgbm_feature_name_warning_is_suppressed():
+    class WarningEstimator:
+        def predict(self, features):
+            warnings.warn(
+                "X does not have valid feature names, but LGBMRegressor "
+                "was fitted with feature names",
+                UserWarning,
+            )
+            return [1.5] * len(features)
+
+    frame = __import__("pandas").DataFrame({"mass_base_g": [10.0], "feature": [2.0]})
+    model = ResidualMassModel(
+        name="lightgbm",
+        model_type="lightgbm",
+        estimator=WarningEstimator(),
+        feature_columns=["feature"],
+        numeric_columns=["feature"],
+        categorical_columns=[],
+    )
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        prediction = model.predict_mass(frame)
+
+    assert prediction.tolist() == pytest.approx([11.5])
+    assert captured == []
+
+
+def test_training_mode_single_trains_only_selected_candidate(tmp_path: Path):
+    config = _config(tmp_path)
+    config.payload["training"]["mode"] = "single"
+    config.payload["training"]["single_model"] = "ridge"
+
+    result = MassEstimationPipeline(config).run_native("preprocess,features,split,train")
+
+    assert result["train"]["training_mode"] == "single"
+    assert result["train"]["selected_candidate"]["name"] == "ridge"
+    assert [candidate["name"] for candidate in result["train"]["candidates"]] == ["ridge"]
+
+
+def test_sklearn_boosting_candidate_trains_in_single_mode(tmp_path: Path):
+    config = _config(tmp_path)
+    config.payload["model"]["candidates"].append(
+        {
+            "name": "gradient_boosting",
+            "type": "gradient_boosting",
+            "enabled": True,
+            "params": {"n_estimators": 20, "learning_rate": 0.05, "max_depth": 2},
+        }
+    )
+    config.payload["training"]["mode"] = "single"
+    config.payload["training"]["single_model"] = "gradient_boosting"
+
+    result = MassEstimationPipeline(config).run_native("preprocess,features,split,train")
+
+    assert result["train"]["selected_candidate"]["name"] == "gradient_boosting"
+    assert result["train"]["selected_candidate"]["type"] == "gradient_boosting"
+
+
+def test_plan_reports_missing_optional_booster_package(tmp_path: Path, monkeypatch):
+    from edge_ai_mass.mass_estimation import pipeline as mass_pipeline_module
+
+    config = _config(tmp_path)
+    config.payload["model"]["candidates"].append(
+        {
+            "name": "xgboost",
+            "type": "xgboost",
+            "enabled": True,
+            "params": {},
+        }
+    )
+    original_find_spec = mass_pipeline_module.importlib.util.find_spec
+
+    def fake_find_spec(name: str):
+        if name == "xgboost":
+            return None
+        return original_find_spec(name)
+
+    monkeypatch.setattr(mass_pipeline_module.importlib.util, "find_spec", fake_find_spec)
+
+    plan = MassEstimationPipeline(config).plan("train")
+
+    assert plan["ready"] is False
+    assert "missing Python package: xgboost" in plan["blocking_issues"]

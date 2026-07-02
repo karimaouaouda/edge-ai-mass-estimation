@@ -22,6 +22,13 @@ from edge_ai_mass.training.checkpoints import (
     resume_target_epochs,
 )
 from edge_ai_mass.training.config import TrainingConfig
+from edge_ai_mass.training.devices import (
+    device_to_log_value,
+    is_cpu_device,
+    is_directml_device,
+    resolve_device_for_ultralytics,
+    resolve_export_device,
+)
 from edge_ai_mass.training.state import PipelineState
 from edge_ai_mass.training.tracking import MLflowSession, flatten_scalars
 from edge_ai_mass.training.visualization import IMAGE_SUFFIXES, create_dataset_visualizations
@@ -113,7 +120,7 @@ class YOLOTrainer:
                             split=str(tuning.get("split", "val")),
                             imgsz=int(trial_args["imgsz"]),
                             batch=trial_args["batch"],
-                            device=self.config.payload["training"].get("device", 0),
+                            device=trial_args["device"],
                             plots=False,
                         )
                         normalized = normalize_metrics(metrics)
@@ -225,6 +232,7 @@ class YOLOTrainer:
                     "manifest": model_source.manifest,
                     "checkpoint_interval_epochs": checkpoint_store.interval,
                     "target_epochs": target_epochs,
+                    "resolved_device": device_to_log_value(train_args.get("device")),
                 },
                 "training/model_source.json",
             )
@@ -313,7 +321,10 @@ class YOLOTrainer:
         requested_device = base_evaluation.get("device")
         if requested_device is None:
             requested_device = self.config.payload["training"].get("device", 0)
-        current_device = requested_device
+        current_device = resolve_device_for_ultralytics(
+            requested_device,
+            purpose="YOLO evaluation",
+        )
         current_batch = self._effective_evaluation_batch(base_evaluation)
         current_plots = bool(base_evaluation.get("plots", False))
         fallback_used = False
@@ -329,7 +340,10 @@ class YOLOTrainer:
                 device=current_device,
                 batch=current_batch,
                 plots=current_plots,
-                cuda_oom_fallback=fallback_reason == "cuda_out_of_memory_cpu",
+                cuda_oom_fallback=bool(
+                    fallback_reason
+                    and fallback_reason.endswith("_out_of_memory_cpu")
+                ),
             )
             precision = self._evaluation_precision_config(evaluation)
             print(
@@ -351,6 +365,7 @@ class YOLOTrainer:
                 )
             except Exception as exc:
                 last_error = exc
+                oom_kind = _accelerator_out_of_memory_kind(exc)
                 if (
                     _is_cuda_runtime_import_error(exc)
                     and self._evaluation_pre_export_enabled(base_evaluation)
@@ -380,15 +395,16 @@ class YOLOTrainer:
                     fallback_used = True
                     fallback_reason = "cuda_runtime_import_disable_pre_export"
                     continue
-                if _is_cuda_out_of_memory(exc) and not _is_cpu_device(current_device):
+                if oom_kind and not _is_cpu_device(current_device):
                     print(
-                        "[evaluation] CUDA out-of-memory detected during evaluation. "
-                        "Applying the next memory-saving retry step."
+                        f"[evaluation] {oom_kind.upper()} out-of-memory detected during "
+                        "evaluation. Applying the next memory-saving retry step."
                     )
                     print(f"[evaluation] Original error: {type(exc).__name__}: {exc}")
                     logger.warning(
-                        "CUDA OOM during evaluation attempt %s; retrying with a "
+                        "%s OOM during evaluation attempt %s; retrying with a "
                         "lower-memory strategy. Error: %s",
+                        oom_kind,
                         attempt_number,
                         exc,
                     )
@@ -398,35 +414,35 @@ class YOLOTrainer:
                     if current_batch > 1:
                         next_batch = _next_smaller_evaluation_batch(current_batch)
                         print(
-                            "[evaluation] Retrying on GPU with a smaller batch: "
+                            "[evaluation] Retrying on the accelerator with a smaller batch: "
                             f"{current_batch} -> {next_batch}."
                         )
                         current_batch = next_batch
                         fallback_used = True
                         fallback_reason = (
-                            f"cuda_out_of_memory_reduce_batch_to_{next_batch}"
+                            f"{oom_kind}_out_of_memory_reduce_batch_to_{next_batch}"
                         )
                         continue
 
                     if current_plots:
                         print(
                             "[evaluation] Batch is already 1. Disabling validation "
-                            "plots and retrying on GPU."
+                            "plots and retrying on the accelerator."
                         )
                         current_plots = False
                         fallback_used = True
-                        fallback_reason = "cuda_out_of_memory_disable_plots"
+                        fallback_reason = f"{oom_kind}_out_of_memory_disable_plots"
                         continue
 
                     print(
-                        "[evaluation] GPU still ran out of memory at batch=1 with "
+                        "[evaluation] Accelerator still ran out of memory at batch=1 with "
                         "plots disabled. Retrying the full evaluation on CPU."
                     )
                     current_device = "cpu"
                     current_batch = 1
                     current_plots = False
                     fallback_used = True
-                    fallback_reason = "cuda_out_of_memory_cpu"
+                    fallback_reason = f"{oom_kind}_out_of_memory_cpu"
                     continue
                 _release_accelerator_memory()
                 raise
@@ -437,12 +453,12 @@ class YOLOTrainer:
                 evaluation_report=str(report_path),
             )
             _release_accelerator_memory()
-            if fallback_reason == "cuda_out_of_memory_cpu":
+            if fallback_reason and fallback_reason.endswith("_out_of_memory_cpu"):
                 print("[evaluation] CPU fallback evaluation completed successfully.")
             elif fallback_used:
                 print(
-                    "[evaluation] Evaluation completed successfully after CUDA OOM "
-                    f"mitigation: {fallback_reason}."
+                    "[evaluation] Evaluation completed successfully after accelerator "
+                    f"memory mitigation: {fallback_reason}."
                 )
             else:
                 print("[evaluation] Evaluation completed successfully.")
@@ -502,8 +518,8 @@ class YOLOTrainer:
                 tracker.mlflow.log_dict(pre_export, "evaluation/pre_export.json")
 
                 execution_report = {
-                    "requested_device": requested_device,
-                    "device": evaluation.get("device"),
+                    "requested_device": device_to_log_value(requested_device),
+                    "device": device_to_log_value(evaluation.get("device")),
                     "batch": self._effective_evaluation_batch(evaluation),
                     "plots": bool(evaluation.get("plots", False)),
                     "fallback_used": fallback_used,
@@ -617,6 +633,28 @@ class YOLOTrainer:
             pre_export["options"] = options
             result["pre_export"] = pre_export
 
+        if is_directml_device(device):
+            # DirectML is a PyTorch execution backend. Keep validation on the
+            # DirectML torch device, but avoid ONNX/TensorRT pre-export because
+            # those backends do not consume DirectML devices in this pipeline.
+            result["precision"] = "fp32"
+            result["half"] = False
+            result["cast_model_to_half"] = False
+            if isinstance(result.get("pre_export"), dict):
+                pre_export = result["pre_export"]
+                options = dict(pre_export.get("options") or {})
+                options["device"] = "cpu"
+                options["half"] = False
+                if batch is not None:
+                    options["batch"] = int(batch)
+                pre_export["options"] = options
+                pre_export["enabled"] = False
+                pre_export["use_for_evaluation"] = False
+                pre_export["disabled_reason"] = (
+                    "directml_evaluation_uses_pytorch_backend"
+                )
+            return result
+
         if not _is_cpu_device(device):
             return result
 
@@ -716,6 +754,12 @@ class YOLOTrainer:
                     **common_options,
                     **dict(format_options.get(export_format, {})),
                 }
+                requested_export_device = options.get("device")
+                if requested_export_device is not None:
+                    options["device"] = resolve_export_device(
+                        requested_export_device,
+                        purpose=f"YOLO export ({export_format})",
+                    )
                 if options.get("int8") and "data" not in options:
                     options["data"] = str(self.config.dataset_dir / "dataset.yaml")
                 model = YOLO(str(best_weights), task=self.config.payload["model"]["task"])
@@ -731,6 +775,7 @@ class YOLOTrainer:
                         "format": export_format,
                         "status": "complete",
                         "options": options,
+                        "requested_device": device_to_log_value(requested_export_device),
                         "artifacts": [
                             {
                                 "path": str(path),
@@ -748,6 +793,7 @@ class YOLOTrainer:
                         "format": export_format,
                         "status": "failed",
                         "options": options,
+                        "requested_device": device_to_log_value(requested_export_device),
                         "error": f"{type(exc).__name__}: {exc}",
                     }
                     entries.append(entry)
@@ -894,6 +940,18 @@ class YOLOTrainer:
         args.update(training.get("augmentation", {}))
         args.update(training.get("extra_args", {}))
         args.update(overrides)
+        raw_device = args.get("device", training.get("device", 0))
+        args["device"] = resolve_device_for_ultralytics(
+            raw_device,
+            purpose="YOLO training",
+        )
+        if is_directml_device(raw_device):
+            # Ultralytics AMP is CUDA-oriented. DirectML execution is more
+            # reliable in FP32 unless a future torch-directml release provides
+            # full AMP parity.
+            if args.get("amp", False):
+                print("[device] DirectML selected for training; disabling AMP.")
+            args["amp"] = False
         return args
 
     def _early_stopping_patience(self) -> int:
@@ -1082,6 +1140,11 @@ class YOLOTrainer:
             "device",
             evaluation.get("device", self.config.payload["training"].get("device", 0)),
         )
+        requested_export_device = options.get("device")
+        options["device"] = resolve_export_device(
+            requested_export_device,
+            purpose=f"evaluation pre-export ({export_format})",
+        )
         if export_format == "engine" and options.get("int8") and "data" not in options:
             options["data"] = str(self.config.dataset_dir / "dataset.yaml")
 
@@ -1109,6 +1172,7 @@ class YOLOTrainer:
                 "status": "complete",
                 "quantization_bits": _quantization_bits(options),
                 "options": options,
+                "requested_device": device_to_log_value(requested_export_device),
                 "use_for_evaluation": bool(pre_export.get("use_for_evaluation", False)),
                 "evaluation_weights": (
                     str(selected)
@@ -1136,6 +1200,7 @@ class YOLOTrainer:
                 "status": "failed",
                 "quantization_bits": _quantization_bits(options),
                 "options": options,
+                "requested_device": device_to_log_value(requested_export_device),
                 "use_for_evaluation": False,
                 "evaluation_weights": None,
                 "error": f"{type(exc).__name__}: {exc}",
@@ -1328,7 +1393,10 @@ class YOLOTrainer:
     def _write_json(self, name: str, payload: dict[str, Any]) -> Path:
         path = self.artifacts_dir / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
         return path
 
 
@@ -1524,7 +1592,7 @@ def _set_evaluation_mode(model: Any) -> dict[str, Any]:
 
 def _is_cpu_device(device: Any) -> bool:
     """Return true for the explicit Ultralytics CPU device selector."""
-    return isinstance(device, str) and device.strip().lower() == "cpu"
+    return is_cpu_device(device)
 
 
 def _next_smaller_evaluation_batch(batch: int) -> int:
@@ -1593,6 +1661,47 @@ def _is_cuda_out_of_memory(exc: BaseException) -> bool:
     return memory_signal and cuda_signal
 
 
+def _accelerator_out_of_memory_kind(exc: BaseException) -> str | None:
+    """Classify accelerator OOM errors for retry policy decisions."""
+    if _is_cuda_out_of_memory(exc):
+        return "cuda"
+    if _is_directml_out_of_memory(exc):
+        return "directml"
+    return None
+
+
+def _is_directml_out_of_memory(exc: BaseException) -> bool:
+    """Detect DirectML OOM messages wrapped by PyTorch/Ultralytics."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    messages: list[str] = []
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        messages.append(f"{type(current).__name__}: {current}")
+        current = current.__cause__ or current.__context__
+
+    text = " ".join(messages).lower()
+    memory_signal = (
+        "out of memory" in text
+        or "oom" in text
+        or "not enough memory" in text
+        or "insufficient memory" in text
+    )
+    directml_signal = any(
+        token in text
+        for token in (
+            "directml",
+            "torch_directml",
+            "torch-directml",
+            "privateuseone",
+            "dml",
+            "d3d12",
+            "dx12",
+        )
+    )
+    return memory_signal and directml_signal
+
+
 def _quantization_bits(options: dict[str, Any]) -> int:
     """Describe export precision in bits for artifact metadata."""
     if options.get("int8"):
@@ -1644,6 +1753,16 @@ def _release_accelerator_memory() -> None:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     except ImportError:
+        pass
+    try:
+        import torch_directml
+
+        empty_cache = getattr(torch_directml, "empty_cache", None)
+        if callable(empty_cache):
+            empty_cache()
+    except Exception:
+        # torch-directml is optional; cache release should never mask the real
+        # training/evaluation error.
         pass
 
 

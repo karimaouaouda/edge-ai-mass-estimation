@@ -132,7 +132,9 @@ training:
     patience: 20
   batch: 16
   imgsz: 640
-  device: 0
+  # Device selector: 0 / "0" for CUDA GPU, cpu for CPU, or directml/dml on Windows.
+  # DirectML requires edge-ai-mass[directml] and disables AMP automatically.
+  device: ${TRAINING_DEVICE:0}
   workers: 8
   cache: false
   amp: true
@@ -252,7 +254,9 @@ evaluation:
   splits: [val, test]
   imgsz: 640
   batch: 2
-  device: 0
+  # Can be overridden independently from training, e.g. EVALUATION_DEVICE=directml.
+  # DirectML evaluation uses PyTorch weights directly and skips ONNX/TensorRT pre-export.
+  device: ${EVALUATION_DEVICE:0}
   # fp16 halves model parameter bytes during evaluation on CUDA-capable devices.
   # Set fp32 for exact baseline comparisons or CPU-only validation.
   precision: fp16
@@ -291,7 +295,9 @@ export:
     common:
       imgsz: 640
       batch: 1
-      device: 0
+      # Exports run on CPU automatically when EXPORT_DEVICE=directml because
+      # DirectML is an execution backend, not an export backend.
+      device: ${EXPORT_DEVICE:0}
     formats:
       onnx:
         opset: 17

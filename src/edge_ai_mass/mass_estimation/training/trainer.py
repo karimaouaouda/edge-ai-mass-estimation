@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import json
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -46,11 +45,11 @@ class MassModelTrainer:
         mass_base_column = str(schema.get("mass_base_column", "mass_base_g"))
         epsilon_g = float(self.config.payload["evaluation"].get("small_mass_epsilon_g", 1.0))
 
-        candidates = [
-            candidate
-            for candidate in self.config.payload["model"]["candidates"]
-            if bool(candidate.get("enabled", True))
-        ]
+        training_cfg = self.config.payload["training"]
+        candidates = _select_training_candidates(
+            self.config.payload["model"]["candidates"],
+            training_cfg,
+        )
         if not candidates:
             raise MassEstimationConfigError("No enabled model candidates were configured")
 
@@ -107,6 +106,7 @@ class MassModelTrainer:
             metadata = {
                 "selected_model": best_result["name"],
                 "selected_type": best_result["type"],
+                "training_mode": str(training_cfg.get("mode", "compare_candidates")),
                 "selection": selection,
                 "feature_schema": schema,
                 "config_digest": self.config.digest,
@@ -124,6 +124,7 @@ class MassModelTrainer:
                 "best_model": str(best_model_path),
                 "best_model_metadata": str(models_dir / "best_model_metadata.json"),
                 "selected_candidate": best_result,
+                "training_mode": str(training_cfg.get("mode", "compare_candidates")),
                 "candidates": candidate_results,
                 "feature_schema": str(self.config.processed_dir / "feature_schema.json"),
                 "model_config_resolved": str(
@@ -236,7 +237,11 @@ class MassModelTrainer:
                 train_df["real_mass_g"] - train_df[mass_base_column],
                 dtype=float,
             )
-            estimator.fit(train_df[feature_columns], residual_target)
+            sample_weight = _sample_weight(
+                train_df,
+                self.config.payload["training"],
+            )
+            _fit_estimator(estimator, train_df[feature_columns], residual_target, sample_weight)
 
         return ResidualMassModel(
             name=name,
@@ -263,7 +268,12 @@ def _build_estimator(
     seed: int,
 ) -> Any:
     from sklearn.compose import ColumnTransformer
-    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.ensemble import (
+        ExtraTreesRegressor,
+        GradientBoostingRegressor,
+        HistGradientBoostingRegressor,
+        RandomForestRegressor,
+    )
     from sklearn.impute import SimpleImputer
     from sklearn.linear_model import HuberRegressor, Ridge
     from sklearn.neural_network import MLPRegressor
@@ -292,11 +302,119 @@ def _build_estimator(
         estimator = HuberRegressor(max_iter=int(params.pop("max_iter", 1000)), **params)
     elif model_type == "random_forest":
         estimator = RandomForestRegressor(random_state=seed, **params)
+    elif model_type == "extra_trees":
+        estimator = ExtraTreesRegressor(random_state=seed, **params)
+    elif model_type == "gradient_boosting":
+        estimator = GradientBoostingRegressor(random_state=seed, **params)
+    elif model_type == "hist_gradient_boosting":
+        estimator = HistGradientBoostingRegressor(random_state=seed, **params)
+    elif model_type == "xgboost":
+        estimator = _build_xgboost_regressor(params=params, seed=seed)
+    elif model_type == "lightgbm":
+        estimator = _build_lightgbm_regressor(params=params, seed=seed)
     elif model_type == "mlp":
         estimator = MLPRegressor(random_state=seed, max_iter=1000, **params)
     else:
         raise MassEstimationConfigError(f"Unsupported learned model type: {model_type}")
     return Pipeline(steps=[("preprocessor", preprocessor), ("regressor", estimator)])
+
+
+def _build_xgboost_regressor(*, params: dict[str, Any], seed: int) -> Any:
+    try:
+        from xgboost import XGBRegressor
+    except ImportError as exc:
+        raise MassEstimationConfigError(
+            "Model type 'xgboost' requires the optional package xgboost. "
+            "Install it with `pip install xgboost` or `pip install -e .[tabular]`."
+        ) from exc
+
+    defaults = {
+        "objective": "reg:squarederror",
+        "eval_metric": "mae",
+        "tree_method": "hist",
+        "random_state": seed,
+        "n_jobs": -1,
+    }
+    defaults.update(params)
+    return XGBRegressor(**defaults)
+
+
+def _build_lightgbm_regressor(*, params: dict[str, Any], seed: int) -> Any:
+    try:
+        from lightgbm import LGBMRegressor
+    except ImportError as exc:
+        raise MassEstimationConfigError(
+            "Model type 'lightgbm' requires the optional package lightgbm. "
+            "Install it with `pip install lightgbm` or `pip install -e .[tabular]`."
+        ) from exc
+
+    defaults = {
+        "objective": "regression",
+        "random_state": seed,
+        "n_jobs": -1,
+        "verbosity": -1,
+    }
+    defaults.update(params)
+    return LGBMRegressor(**defaults)
+
+
+def _select_training_candidates(
+    configured_candidates: list[dict[str, Any]],
+    training_cfg: dict[str, Any],
+) -> list[dict[str, Any]]:
+    enabled = [
+        candidate for candidate in configured_candidates if bool(candidate.get("enabled", True))
+    ]
+    mode = str(training_cfg.get("mode", "compare_candidates"))
+    if mode in {"compare", "compare_candidates", "best_of_candidates", "best"}:
+        return enabled
+    if mode in {"single", "one_model"}:
+        selected_name = str(
+            training_cfg.get(
+                "single_model",
+                training_cfg.get("model_name", training_cfg.get("candidate", "")),
+            )
+        )
+        if not selected_name:
+            raise MassEstimationConfigError(
+                "training.mode=single requires training.single_model"
+            )
+        selected = [candidate for candidate in enabled if candidate["name"] == selected_name]
+        if not selected:
+            raise MassEstimationConfigError(
+                f"training.single_model '{selected_name}' is not an enabled candidate"
+            )
+        return selected
+    raise MassEstimationConfigError(
+        "training.mode must be compare_candidates or single"
+    )
+
+
+def _sample_weight(frame: Any, training_cfg: dict[str, Any]) -> np.ndarray | None:
+    if not bool(training_cfg.get("use_sample_weight", True)):
+        return None
+    column = str(training_cfg.get("sample_weight_column", "sample_weight"))
+    if column not in frame.columns:
+        return None
+    weights = frame[column].astype(float).to_numpy()
+    if not np.isfinite(weights).all():
+        weights = np.where(np.isfinite(weights), weights, 1.0)
+    return np.maximum(weights, 0.0)
+
+
+def _fit_estimator(
+    estimator: Any,
+    features: Any,
+    target: np.ndarray,
+    sample_weight: np.ndarray | None,
+) -> None:
+    if sample_weight is None:
+        estimator.fit(features, target)
+        return
+    try:
+        estimator.fit(features, target, regressor__sample_weight=sample_weight)
+    except TypeError:
+        estimator.fit(features, target)
 
 
 def _one_hot_encoder(factory: Any) -> Any:

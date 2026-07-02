@@ -43,8 +43,10 @@ class MassEstimationPipeline:
             "sklearn": bool(importlib.util.find_spec("sklearn")),
             "joblib": bool(importlib.util.find_spec("joblib")),
             "mlflow": bool(importlib.util.find_spec("mlflow")),
-            "zenml": bool(importlib.util.find_spec("zenml")),
+            "zenml": False,
             "matplotlib": bool(importlib.util.find_spec("matplotlib")),
+            "xgboost": bool(importlib.util.find_spec("xgboost")),
+            "lightgbm": bool(importlib.util.find_spec("lightgbm")),
         }
         blocking_issues = []
         measurements = self.config.path(self.config.payload["data"]["measurements"])
@@ -54,8 +56,18 @@ class MassEstimationPipeline:
         required_packages = {"pandas", "sklearn", "joblib"}
         if self._tracking_enabled():
             required_packages.add("mlflow")
-        if self._zenml_enabled():
-            required_packages.add("zenml")
+        enabled_model_types = {
+            str(candidate.get("type", ""))
+            for candidate in self.config.payload["model"].get("candidates", [])
+            if bool(candidate.get("enabled", True))
+        }
+        optional_model_packages = {
+            "xgboost": "xgboost",
+            "lightgbm": "lightgbm",
+        }
+        for model_type, package_name in optional_model_packages.items():
+            if model_type in enabled_model_types:
+                required_packages.add(package_name)
         blocking_issues.extend(
             f"missing Python package: {name}"
             for name in sorted(required_packages)
@@ -72,6 +84,7 @@ class MassEstimationPipeline:
             "processed_dir": str(self.config.processed_dir),
             "artifacts_dir": str(self.config.artifacts_dir),
             "packages": packages,
+            "zenml_disabled": True,
             "ready": not blocking_issues,
             "blocking_issues": blocking_issues,
         }
@@ -135,11 +148,7 @@ class MassEstimationPipeline:
         return results
 
     def _zenml_enabled(self) -> bool:
-        return bool(
-            self.config.payload.get("orchestration", {})
-            .get("zenml", {})
-            .get("enabled", True)
-        )
+        return False
 
     def _tracking_enabled(self) -> bool:
         return bool(self.config.payload["tracking"].get("enabled", True))

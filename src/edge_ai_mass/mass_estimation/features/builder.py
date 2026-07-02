@@ -17,9 +17,41 @@ from edge_ai_mass.mass_estimation.io import (
 )
 
 
-IDENTIFIER_COLUMNS = {"sample_id", "object_id", "image_id", "source_image"}
+IDENTIFIER_COLUMNS = {
+    "sample_id",
+    "object_id",
+    "image_id",
+    "annotation_id",
+    "source_image",
+    "image_path",
+    "mask_path",
+    "depth_path",
+}
+TRACE_COLUMNS = {
+    "source_dataset",
+    "split",
+    "calibration_id",
+    "feature_version",
+    "mass_label_type",
+    "sample_weight",
+    "is_outlier",
+    "outlier_reason",
+    "mass_metadata_category",
+    "mass_metadata_state",
+    "mass_metadata_notes",
+}
 TARGET_COLUMNS = {"real_mass_g"}
-DERIVED_TARGET_COLUMNS = {"correction_g", "residual_g", "residual_target_g"}
+DERIVED_TARGET_COLUMNS = {
+    "correction_g",
+    "residual_g",
+    "residual_target_g",
+    "predicted_correction_g",
+    "mass_pred_g",
+    "predicted_mass_g",
+    "baseline_error_g",
+    "abs_baseline_error_g",
+    "baseline_relative_error",
+}
 
 
 def build_feature_dataset(config: MassEstimationConfig) -> dict[str, Any]:
@@ -56,6 +88,7 @@ def build_feature_dataset(config: MassEstimationConfig) -> dict[str, Any]:
             "material",
             "real_mass_g",
             mass_base_column,
+            *sorted(TRACE_COLUMNS),
             *feature_columns,
         ]
     )
@@ -75,6 +108,7 @@ def build_feature_dataset(config: MassEstimationConfig) -> dict[str, Any]:
         "target_column": "real_mass_g",
         "mass_base_column": mass_base_column,
         "identifier_columns": [column for column in IDENTIFIER_COLUMNS if column in feature_df],
+        "trace_columns": [column for column in TRACE_COLUMNS if column in feature_df],
         "excluded_columns": sorted(_excluded_columns(features_cfg)),
         "ignored_configured_columns": {
             "numeric": ignored_numeric,
@@ -147,7 +181,13 @@ def _resolve_categorical_columns(
 
 def _excluded_columns(features_cfg: dict[str, Any]) -> set[str]:
     configured = {str(column) for column in features_cfg.get("exclude_columns", [])}
-    return IDENTIFIER_COLUMNS | TARGET_COLUMNS | DERIVED_TARGET_COLUMNS | configured
+    return (
+        IDENTIFIER_COLUMNS
+        | TRACE_COLUMNS
+        | TARGET_COLUMNS
+        | DERIVED_TARGET_COLUMNS
+        | configured
+    )
 
 
 def _require_columns(df: Any, columns: list[str]) -> None:

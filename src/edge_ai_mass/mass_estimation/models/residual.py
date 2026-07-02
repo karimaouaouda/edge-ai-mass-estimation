@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -35,7 +36,17 @@ class ResidualMassModel:
         if self.model_type == "physics_only" or self.estimator is None:
             return np.zeros(len(frame), dtype=float)
         features = frame[self.feature_columns].copy()
-        return np.asarray(self.estimator.predict(features), dtype=float)
+        with warnings.catch_warnings():
+            if self.model_type == "lightgbm":
+                warnings.filterwarnings(
+                    "ignore",
+                    message=(
+                        "X does not have valid feature names, but LGBMRegressor "
+                        "was fitted with feature names"
+                    ),
+                    category=UserWarning,
+                )
+            return np.asarray(self.estimator.predict(features), dtype=float)
 
     def predict_mass(self, frame: Any) -> np.ndarray:
         base_mass = np.asarray(frame[self.mass_base_column], dtype=float)

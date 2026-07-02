@@ -17,6 +17,11 @@ from edge_ai_mass.training.checkpoints import (
     resume_target_epochs,
 )
 from edge_ai_mass.training.config import TrainingConfig, TrainingConfigError, normalize_stages
+from edge_ai_mass.training.devices import (
+    is_directml_device,
+    requires_torch_directml,
+    resolve_export_device,
+)
 from edge_ai_mass.training.pipeline import TrainingPipeline
 from edge_ai_mass.training.preprocessing import DatasetBuildError, build_yolo_dataset
 from edge_ai_mass.training.publication import (
@@ -29,6 +34,7 @@ from edge_ai_mass.training.tracking import normalize_uri
 from edge_ai_mass.training.visualization import create_dataset_visualizations
 from edge_ai_mass.training.yolo import (
     YOLOTrainer,
+    _accelerator_out_of_memory_kind,
     _is_cuda_runtime_import_error,
     _is_cuda_out_of_memory,
     _next_smaller_evaluation_batch,
@@ -358,6 +364,28 @@ def test_plan_reports_broken_onnxruntime_cuda_runtime_import(
     )
 
 
+def test_plan_requires_torch_directml_for_directml_training(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import edge_ai_mass.training.pipeline as pipeline_module
+
+    config = _config(tmp_path)
+    config.payload["training"]["device"] = "directml"
+
+    def fake_package_status(name: str):
+        if name == "torch-directml":
+            return {"available": False, "error": None}
+        return {"available": True, "error": None}
+
+    monkeypatch.setattr(pipeline_module, "_package_status", fake_package_status)
+
+    plan = TrainingPipeline(config).plan("train")
+
+    assert plan["packages"]["torch-directml"] is False
+    assert "missing Python package: torch-directml" in plan["blocking_issues"]
+
+
 def test_metric_normalization_exposes_stable_names():
     metrics = {"metrics/mAP50-95(M)": 0.42, "metrics/mAP50(B)": 0.71}
     normalized = normalize_metrics(metrics)
@@ -455,6 +483,24 @@ def test_cuda_runtime_import_error_detection_handles_onnxruntime_gpu_mismatch():
     assert _is_cuda_runtime_import_error(ImportError("onnxruntime missing")) is False
 
 
+def test_directml_device_aliases_and_export_fallback():
+    assert is_directml_device("directml") is True
+    assert is_directml_device("dml:1") is True
+    assert is_directml_device("privateuseone:0") is True
+    assert is_directml_device("cpu") is False
+    assert requires_torch_directml("cpu", "directml") is True
+    assert resolve_export_device("directml", purpose="unit test") == "cpu"
+
+
+def test_directml_oom_detection_handles_wrapped_runtime_errors():
+    root = RuntimeError("DirectML device ran out of memory on D3D12.")
+    wrapped = RuntimeError("Failed to run validation")
+    wrapped.__cause__ = root
+
+    assert _accelerator_out_of_memory_kind(wrapped) == "directml"
+    assert _accelerator_out_of_memory_kind(RuntimeError("metric is missing")) is None
+
+
 def test_cuda_oom_retry_halves_batch_until_one():
     assert _next_smaller_evaluation_batch(16) == 8
     assert _next_smaller_evaluation_batch(3) == 2
@@ -531,6 +577,75 @@ def test_cpu_evaluation_fallback_disables_cuda_precision_and_engine_export(
         fallback["pre_export"]["disabled_reason"]
         == "cpu_fallback_skips_tensorrt_engine_pre_export"
     )
+
+
+def test_directml_evaluation_disables_pre_export_and_fp16_casting(
+    tmp_path: Path,
+):
+    config = _config(tmp_path)
+    trainer = YOLOTrainer(config, PipelineState(config.artifacts_dir / "state.json"))
+
+    evaluation = trainer._evaluation_for_device(
+        {
+            "precision": "fp16",
+            "half": True,
+            "cast_model_to_half": True,
+            "batch": 4,
+            "device": 0,
+            "pre_export": {
+                "enabled": True,
+                "format": "onnx",
+                "use_for_evaluation": True,
+                "options": {"half": True, "device": 0, "batch": 4},
+            },
+        },
+        device="privateuseone:0",
+        batch=2,
+    )
+
+    assert evaluation["device"] == "privateuseone:0"
+    assert evaluation["precision"] == "fp32"
+    assert evaluation["half"] is False
+    assert evaluation["cast_model_to_half"] is False
+    assert evaluation["pre_export"]["enabled"] is False
+    assert evaluation["pre_export"]["use_for_evaluation"] is False
+    assert evaluation["pre_export"]["disabled_reason"] == (
+        "directml_evaluation_uses_pytorch_backend"
+    )
+    assert evaluation["pre_export"]["options"]["device"] == "cpu"
+    assert evaluation["pre_export"]["options"]["half"] is False
+    assert evaluation["pre_export"]["options"]["batch"] == 2
+
+
+def test_directml_training_device_resolves_and_disables_amp(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import edge_ai_mass.training.devices as devices_module
+
+    config = _config(tmp_path)
+    config.payload["training"].update({"device": "directml:1", "amp": True})
+    trainer = YOLOTrainer(config, PipelineState(config.artifacts_dir / "state.json"))
+
+    class FakeTorchDirectML:
+        @staticmethod
+        def device(index=0):
+            return f"privateuseone:{index}"
+
+    def fake_import_module(name: str):
+        assert name == "torch_directml"
+        return FakeTorchDirectML
+
+    monkeypatch.setattr(
+        devices_module.importlib,
+        "import_module",
+        fake_import_module,
+    )
+
+    args = trainer._train_args({}, tuning=False, run_name="directml-unit")
+
+    assert args["device"] == "privateuseone:1"
+    assert args["amp"] is False
 
 
 def test_evaluation_validation_args_pass_half_precision_without_hidden_device(

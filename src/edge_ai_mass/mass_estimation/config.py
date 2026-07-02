@@ -101,7 +101,18 @@ class MassEstimationConfig:
         if not isinstance(candidates, list) or not candidates:
             raise MassEstimationConfigError("model.candidates must be a non-empty list")
         names: set[str] = set()
-        supported = {"physics_only", "ridge", "huber", "random_forest", "mlp"}
+        supported = {
+            "physics_only",
+            "ridge",
+            "huber",
+            "random_forest",
+            "extra_trees",
+            "gradient_boosting",
+            "hist_gradient_boosting",
+            "xgboost",
+            "lightgbm",
+            "mlp",
+        }
         for index, candidate in enumerate(candidates):
             if not isinstance(candidate, dict):
                 raise MassEstimationConfigError(f"model.candidates[{index}] must be a mapping")
@@ -126,6 +137,21 @@ class MassEstimationConfig:
         tracking = self.payload["tracking"]
         if not isinstance(tracking.get("registry", {}), dict):
             raise MassEstimationConfigError("tracking.registry must be a mapping")
+
+        training = self.payload["training"]
+        mode = str(training.get("mode", "compare_candidates"))
+        allowed_training_modes = {
+            "compare",
+            "compare_candidates",
+            "best_of_candidates",
+            "best",
+            "single",
+            "one_model",
+        }
+        if mode not in allowed_training_modes:
+            raise MassEstimationConfigError(
+                "training.mode must be compare_candidates or single"
+            )
 
         zenml = self.payload.get("orchestration", {}).get("zenml", {})
         if zenml and not isinstance(zenml, dict):

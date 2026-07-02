@@ -36,11 +36,30 @@ def split_feature_dataset(config: MassEstimationConfig) -> dict[str, Any]:
     if "class_name" not in df.columns:
         raise MassEstimationConfigError("class_name is required for split reporting")
 
-    assignments, strategy = _split_groups(df, group_column=group_column, split_cfg=split_cfg)
-    split_df = df.copy()
-    split_df["split"] = split_df[group_column].map(assignments)
-    if split_df["split"].isna().any():
-        raise RuntimeError("Internal split error: some rows were not assigned a split")
+    split_column = str(split_cfg.get("split_column", "split"))
+    if bool(split_cfg.get("use_existing", False)):
+        if split_column not in df.columns:
+            raise MassEstimationConfigError(
+                f"split.use_existing=true but column '{split_column}' is missing"
+            )
+        split_df = df.copy()
+        split_df["split"] = split_df[split_column].map(_normalize_split_name)
+        invalid = sorted(set(split_df["split"].dropna()) - {"train", "val", "test"})
+        if invalid:
+            raise MassEstimationConfigError(
+                f"Existing split column contains unsupported values: {invalid}"
+            )
+        if split_df["split"].isna().any():
+            raise MassEstimationConfigError("Existing split column contains missing values")
+        strategy = {"existing_split": True, "split_column": split_column, "group_aware": True}
+    else:
+        assignments, strategy = _split_groups(
+            df, group_column=group_column, split_cfg=split_cfg
+        )
+        split_df = df.copy()
+        split_df["split"] = split_df[group_column].map(assignments)
+        if split_df["split"].isna().any():
+            raise RuntimeError("Internal split error: some rows were not assigned a split")
 
     outputs: dict[str, str] = {}
     suffix = feature_path.suffix
@@ -170,6 +189,14 @@ def _stratify_or_none(labels: list[Any]) -> list[Any] | None:
     if len(counts) < 2 or min(counts.values()) < 2:
         return None
     return labels
+
+
+def _normalize_split_name(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    aliases = {"validation": "val", "valid": "val", "dev": "val", "testing": "test"}
+    return aliases.get(normalized, normalized)
 
 
 def _group_overlap_report(df: Any, group_column: str) -> dict[str, list[str]]:

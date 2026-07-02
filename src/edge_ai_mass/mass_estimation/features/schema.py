@@ -10,9 +10,13 @@ LEAKAGE_COLUMN_PATTERNS = (
     re.compile(r"(^|_)measured_?mass(_|$)", re.IGNORECASE),
     re.compile(r"(^|_)ground_?truth_?mass(_|$)", re.IGNORECASE),
     re.compile(r"(^|_)target(_|$)", re.IGNORECASE),
-    re.compile(r"(^|_)label(_|$)", re.IGNORECASE),
     re.compile(r"(^|_)correction(_|$)", re.IGNORECASE),
     re.compile(r"(^|_)residual(_|$)", re.IGNORECASE),
+    re.compile(r"(^|_)predicted_?mass(_|$)", re.IGNORECASE),
+    re.compile(r"(^|_)mass_?pred(_|$)", re.IGNORECASE),
+    re.compile(r"(^|_)baseline_?error(_|$)", re.IGNORECASE),
+    re.compile(r"(^|_)abs_?baseline_?error(_|$)", re.IGNORECASE),
+    re.compile(r"(^|_)baseline_?relative_?error(_|$)", re.IGNORECASE),
 )
 
 

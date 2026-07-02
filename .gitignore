@@ -12,6 +12,10 @@ build/
 .venv/
 venv/
 env/
+mass_model
+
+train_output/*
+thesis_work
 
 # IDE
 .vscode/

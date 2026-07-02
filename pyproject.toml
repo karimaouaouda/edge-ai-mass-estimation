@@ -48,6 +48,10 @@ eval = [
     "pandas>=2.0",
     "tensorboard>=2.14",
 ]
+tabular = [
+    "xgboost>=2.0",
+    "lightgbm>=4.0",
+]
 mlops = [
     "mlflow>=2.14",
     "zenml>=0.95,<0.96",
@@ -67,7 +71,10 @@ webrtc = [
     "aiortc>=1.9",
     "av>=12",
 ]
-all = ["edge-ai-mass[depth,dev,data,eval,mlops,orchestration,webrtc]"]
+directml = [
+    "torch-directml",
+]
+all = ["edge-ai-mass[depth,dev,data,eval,tabular,mlops,orchestration,webrtc,directml]"]
 
 [project.scripts]
 edge-ai-mass = "edge_ai_mass.cli:main"
