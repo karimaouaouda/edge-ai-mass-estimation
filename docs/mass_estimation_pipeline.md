@@ -93,6 +93,24 @@ per-class metrics, error analysis, and plots when Matplotlib is installed.
 `register` packages the best residual model as an MLflow PyFunc model and
 assigns the configured registry alias.
 
+## Runtime inference integration
+
+The deployed inference cascade uses
+`edge_ai_mass.modules.mass.residual_estimator.ResidualMassEstimator` as the
+primary mass stage. For every dashboard-triggered inference, the detection,
+depth, and geometry stages produce the object mask, bbox, calibrated dimensions,
+depth statistics, volume, material prior, and density prior needed to build the
+same tabular feature row used during training. The estimator loads:
+
+```text
+artifacts/mass_estimation/mass-model-feature-residuals/models/best_model.joblib
+```
+
+by default on local runs, or the path supplied by `EDGE_AI_MASS_MODEL_PATH` on a
+device. The normalized dashboard payload includes the generated row at
+`objects[].features.mass_features` so thesis experiments can trace each mass
+prediction back to its physics baseline and residual inputs.
+
 ## Commands
 
 Inspect readiness without writing artifacts:

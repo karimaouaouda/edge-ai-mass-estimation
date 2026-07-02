@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import time
 from pathlib import Path
@@ -29,6 +30,8 @@ from edge_ai_mass.agent.telemetry import TelemetrySampler
 
 logger = logging.getLogger(__name__)
 
+PIPELINE_MODEL_TASKS = {"detector", "depth", "material", "mass"}
+
 
 class EdgeDeviceAgent:
     """Coordinate backend HTTP, MQTT, telemetry, and inference workflows."""
@@ -43,6 +46,7 @@ class EdgeDeviceAgent:
         outbox: FileOutbox | None = None,
         telemetry: TelemetrySampler | None = None,
         inference_runner_factory: Callable[[], InferenceRunner] | None = None,
+        auto_updater_factory: Callable[[], Any] | None = None,
         preview_manager: PreviewManager | None = None,
         preview_camera_available: Callable[[str], bool] | None = None,
         model_manager: ModelManager | None = None,
@@ -60,6 +64,7 @@ class EdgeDeviceAgent:
         )
         self.telemetry = telemetry
         self.inference_runner_factory = inference_runner_factory
+        self.auto_updater_factory = auto_updater_factory
         camera_probe = preview_camera_available or CaptureAdapter().is_camera_connected
         self.preview_manager = preview_manager or self._build_preview_manager(camera_probe)
         self.active_models = dict(config.device.active_models)
@@ -73,12 +78,19 @@ class EdgeDeviceAgent:
             current_version=config.device.firmware_version,
         )
         self._inference_busy = False
+        self._update_check_busy = False
         self._stop_requested = False
         self._inference_runner: InferenceRunner | None = None
+        self._auto_updater: Any | None = None
+        self._auto_update_interval_seconds = 0.0
+        self._next_update_check: float | None = None
 
     def start(self) -> None:
         """Initialize network clients and send the first telemetry payload."""
 
+        self._start_auto_update_runtime()
+        if self.config.updates.enabled and self.config.updates.run_on_start:
+            self._check_for_updates(reason="startup")
         self._preload_inference_runtime()
         self.outbox.start()
         if self.http is None:
@@ -116,6 +128,7 @@ class EdgeDeviceAgent:
         self.start()
         next_telemetry = time.monotonic() + self.config.runtime.telemetry_interval_seconds
         while not self._stop_requested:
+            self._maybe_check_for_updates()
             self._publish_preview_runtime_events()
             self.flush_outbox()
             now = time.monotonic()
@@ -649,6 +662,14 @@ class EdgeDeviceAgent:
             return
 
         self.active_models.update(payload.get("active_models") or {})
+        activated_components = payload.get("activated_components") or []
+        self._apply_active_model_path_overrides(activated_components)
+        if any(
+            str(component.get("task") or "") in PIPELINE_MODEL_TASKS
+            for component in activated_components
+            if isinstance(component, dict)
+        ):
+            self._inference_runner = None
         self.publish_event(
             "model_deployment.succeeded",
             payload,
@@ -660,6 +681,78 @@ class EdgeDeviceAgent:
             correlation_id=correlation_id,
             request_id=request_id,
         )
+
+    def _start_auto_update_runtime(self) -> None:
+        if not self.config.updates.enabled:
+            return
+        if self._auto_updater is None:
+            self._auto_updater = self._build_auto_updater()
+        self._auto_update_interval_seconds = self._resolve_auto_update_interval()
+        self._next_update_check = time.monotonic() + self._auto_update_interval_seconds
+
+    def _build_auto_updater(self) -> Any:
+        if self.auto_updater_factory is not None:
+            return self.auto_updater_factory()
+
+        from edge_ai_mass.orchestration.config import OrchestratorConfig
+        from edge_ai_mass.orchestration.updater import Updater
+
+        config_path = Path(self.config.updates.config_path)
+        if not config_path.is_absolute():
+            config_path = Path.cwd() / config_path
+        update_config = OrchestratorConfig.from_file(config_path)
+        return Updater(update_config, restart_callback=self._on_update_restart_requested)
+
+    def _resolve_auto_update_interval(self) -> float:
+        configured = self.config.updates.poll_interval_seconds
+        if configured is not None and configured > 0:
+            return float(configured)
+        updater_config = getattr(self._auto_updater, "config", None)
+        interval = getattr(updater_config, "poll_interval_seconds", 6 * 60 * 60)
+        return float(max(interval, 60))
+
+    def _maybe_check_for_updates(self) -> None:
+        if not self.config.updates.enabled or self._next_update_check is None:
+            return
+        now = time.monotonic()
+        if now < self._next_update_check:
+            return
+        self._check_for_updates(reason="periodic")
+        self._next_update_check = time.monotonic() + self._auto_update_interval_seconds
+
+    def _check_for_updates(self, *, reason: str) -> None:
+        if not self.config.updates.enabled or self._update_check_busy:
+            return
+        if self._auto_updater is None:
+            self._auto_updater = self._build_auto_updater()
+        self._update_check_busy = True
+        logger.info("Checking for agent updates: reason=%s", reason)
+        try:
+            result = self._auto_updater.check_for_updates(
+                target=self.config.updates.target,
+                force=self.config.updates.force,
+                release_tag=self.config.updates.release_tag,
+            )
+        except Exception as exc:
+            logger.exception("Automatic update check failed")
+            print(f"Automatic update check failed: {exc}")
+            return
+        finally:
+            self._update_check_busy = False
+
+        if getattr(result, "changed", False):
+            logger.info("Automatic update installed: %s", getattr(result, "message", ""))
+            print(f"Automatic update installed: {getattr(result, 'message', '')}")
+            self._on_update_restart_requested()
+            if self.http is not None or self.mqtt is not None:
+                self.send_telemetry(status="online")
+        else:
+            logger.info("Automatic update check completed: %s", getattr(result, "message", ""))
+
+    def _on_update_restart_requested(self) -> bool:
+        self._inference_runner = None
+        self._apply_active_model_path_overrides()
+        return True
 
     def _upload_requested_media(self, envelope: Envelope, result: Any) -> dict[str, Any]:
         options = envelope.payload.get("options")
@@ -718,6 +811,7 @@ class EdgeDeviceAgent:
             else:
                 from edge_ai_mass.pipeline.factory import build_pipeline
 
+                self._apply_active_model_path_overrides()
                 pipeline = build_pipeline(self.config.runtime.pipeline_config)
                 print("Loading inference pipeline...")
                 pipeline.load_all()
@@ -765,6 +859,29 @@ class EdgeDeviceAgent:
             (time.perf_counter() - started) * 1000.0,
             self.active_models,
         )
+
+    def _apply_active_model_path_overrides(
+        self,
+        activated_components: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Expose deployed model artifacts to YAML configs through env overrides."""
+
+        mass_path = None
+        for component in activated_components or []:
+            if not isinstance(component, dict) or component.get("task") != "mass":
+                continue
+            active_path = component.get("active_path")
+            if active_path:
+                mass_path = Path(str(active_path))
+                break
+
+        if mass_path is None:
+            active_artifact_path = getattr(self.model_manager, "active_artifact_path", None)
+            if callable(active_artifact_path):
+                mass_path = active_artifact_path("mass")
+
+        if mass_path is not None and Path(mass_path).is_file():
+            os.environ["EDGE_AI_MASS_MODEL_PATH"] = str(Path(mass_path))
 
     def _install_signal_handlers(self) -> None:
         def _request_stop(_signum: int, _frame: object) -> None:

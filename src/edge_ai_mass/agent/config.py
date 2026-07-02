@@ -72,6 +72,19 @@ class RuntimeSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class AutoUpdateSettings:
+    """Periodic GitHub Release update checks performed by the agent."""
+
+    enabled: bool = False
+    config_path: str = "configs/orchestration/jetson_nano.yaml"
+    run_on_start: bool = True
+    poll_interval_seconds: float | None = None
+    target: str | None = None
+    force: bool = False
+    release_tag: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class AgentConfig:
     """Top-level edge agent configuration."""
 
@@ -79,6 +92,7 @@ class AgentConfig:
     backend: BackendSettings = field(default_factory=BackendSettings)
     mqtt: MQTTSettings = field(default_factory=MQTTSettings)
     runtime: RuntimeSettings = field(default_factory=RuntimeSettings)
+    updates: AutoUpdateSettings = field(default_factory=AutoUpdateSettings)
 
     @classmethod
     def from_file(cls, path: str | Path) -> "AgentConfig":
@@ -92,6 +106,7 @@ class AgentConfig:
         backend_raw = raw.get("backend") or {}
         mqtt_raw = raw.get("mqtt") or {}
         runtime_raw = raw.get("runtime") or {}
+        updates_raw = raw.get("updates") or {}
 
         device_id = str(device_raw.get("id") or raw.get("device_id") or "").strip()
         if not device_id:
@@ -181,7 +196,32 @@ class AgentConfig:
             ),
         )
 
-        return cls(device=device, backend=backend, mqtt=mqtt, runtime=runtime)
+        poll_interval = updates_raw.get("poll_interval_seconds")
+        updates = AutoUpdateSettings(
+            enabled=_as_bool(updates_raw.get("enabled", False)),
+            config_path=str(
+                updates_raw.get("config_path")
+                or updates_raw.get("config")
+                or "configs/orchestration/jetson_nano.yaml"
+            ),
+            run_on_start=_as_bool(updates_raw.get("run_on_start", True)),
+            poll_interval_seconds=(
+                float(poll_interval) if poll_interval not in (None, "") else None
+            ),
+            target=_optional_string(updates_raw.get("target")),
+            force=_as_bool(updates_raw.get("force", False)),
+            release_tag=_optional_string(
+                updates_raw.get("release_tag") or updates_raw.get("release")
+            ),
+        )
+
+        return cls(
+            device=device,
+            backend=backend,
+            mqtt=mqtt,
+            runtime=runtime,
+            updates=updates,
+        )
 
     def require_device_token(self, secret_store: SecretStore) -> str:
         """Return the HTTP provisioning token or fail startup clearly."""
@@ -221,3 +261,9 @@ def _bool_map(value: Any) -> dict[str, bool]:
     if not isinstance(value, dict):
         return {}
     return {str(key): _as_bool(val) for key, val in value.items()}
+
+
+def _optional_string(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    return str(value)

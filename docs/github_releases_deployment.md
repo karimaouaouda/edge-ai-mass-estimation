@@ -14,8 +14,10 @@ Assets:
   edge-ai-update-manifest.json
   yolov8n-seg.engine
   yolo-seg-best.pt
-  mass_regression.pt
+  mass_residual_best_model.joblib
   jetson_nano.yaml
+  agent_jetson_nano.yaml
+  orchestration_jetson_nano.yaml
   edge_ai_mass-0.2.0-py3-none-any.whl
 ```
 
@@ -53,10 +55,10 @@ Example:
       "required": true
     },
     {
-      "name": "mass-regression-weights",
+      "name": "mass-residual-model",
       "target": "model",
-      "asset": "mass_regression.pt",
-      "destination": "models/weights/mass_regression.pt",
+      "asset": "mass_residual_best_model.joblib",
+      "destination": "models/weights/mass_residual_best_model.joblib",
       "sha256": "PUT_SHA256_HERE",
       "restart_app": true,
       "required": false
@@ -66,6 +68,24 @@ Example:
       "target": "config",
       "asset": "jetson_nano.yaml",
       "destination": "configs/pipeline/jetson_nano.yaml",
+      "sha256": "PUT_SHA256_HERE",
+      "restart_app": true,
+      "required": true
+    },
+    {
+      "name": "jetson-agent-config",
+      "target": "config",
+      "asset": "agent_jetson_nano.yaml",
+      "destination": "configs/agent/jetson_nano.yaml",
+      "sha256": "PUT_SHA256_HERE",
+      "restart_app": true,
+      "required": true
+    },
+    {
+      "name": "jetson-orchestrator-config",
+      "target": "config",
+      "asset": "orchestration_jetson_nano.yaml",
+      "destination": "configs/orchestration/jetson_nano.yaml",
       "sha256": "PUT_SHA256_HERE",
       "restart_app": true,
       "required": true
@@ -188,8 +208,10 @@ python -m build --wheel
 ```bash
 mkdir -p release/v0.2.0
 cp models/weights/yolov8n-seg.engine release/v0.2.0/
-cp models/weights/mass_regression.pt release/v0.2.0/
+cp models/weights/mass_residual_best_model.joblib release/v0.2.0/
 cp configs/pipeline/jetson_nano.yaml release/v0.2.0/
+cp configs/agent/jetson_nano.yaml release/v0.2.0/agent_jetson_nano.yaml
+cp configs/orchestration/jetson_nano.yaml release/v0.2.0/orchestration_jetson_nano.yaml
 cp dist/edge_ai_mass-0.2.0-py3-none-any.whl release/v0.2.0/
 ```
 
@@ -327,7 +349,7 @@ Model-only release:
 ```text
 edge-ai-update-manifest.json
 yolov8n-seg.engine
-mass_regression.pt
+mass_residual_best_model.joblib
 ```
 
 Kaggle Model-backed detector release:
@@ -335,6 +357,8 @@ Kaggle Model-backed detector release:
 ```text
 edge-ai-update-manifest.json
 jetson_nano.yaml
+agent_jetson_nano.yaml
+orchestration_jetson_nano.yaml
 ```
 
 In this release type, the manifest points to the exact Kaggle Model version and `kaggle_model_file`; the detector weight itself stays in Kaggle Models.
@@ -352,8 +376,10 @@ Full application release:
 edge-ai-update-manifest.json
 edge_ai_mass-0.2.0-py3-none-any.whl
 yolov8n-seg.engine
-mass_regression.pt
+mass_residual_best_model.joblib
 jetson_nano.yaml
+agent_jetson_nano.yaml
+orchestration_jetson_nano.yaml
 ```
 
 ## Operational Notes

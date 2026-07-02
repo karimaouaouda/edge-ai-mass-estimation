@@ -6,7 +6,7 @@ device:
   name: ${EDGE_AI_DEVICE_NAME:Jetson Nano}
   type: jetson_nano
   firmware_version: ${EDGE_AI_FIRMWARE_VERSION:unknown}
-  agent_version: ${EDGE_AI_AGENT_VERSION:0.1.0}
+  agent_version: ${EDGE_AI_AGENT_VERSION:0.1.1}
   capabilities:
     inference: true
     preview: true
@@ -33,6 +33,15 @@ mqtt:
   keepalive_seconds: ${DROVENAI_MQTT_KEEPALIVE_SECONDS:30}
   client_id: ${DROVENAI_MQTT_CLIENT_ID:jetson-nano-agent}
   qos: ${DROVENAI_MQTT_QOS:0}
+
+updates:
+  enabled: ${DROVENAI_AUTO_UPDATE_ENABLED:true}
+  config_path: ${EDGE_AI_ORCHESTRATOR_CONFIG:configs/orchestration/jetson_nano.yaml}
+  run_on_start: ${DROVENAI_AUTO_UPDATE_RUN_ON_START:true}
+  poll_interval_seconds: ${DROVENAI_AUTO_UPDATE_INTERVAL_SECONDS:21600}
+  target: ${DROVENAI_AUTO_UPDATE_TARGET:all}
+  force: ${DROVENAI_AUTO_UPDATE_FORCE:false}
+  release_tag: ${DROVENAI_AUTO_UPDATE_RELEASE_TAG:}
 
 runtime:
   telemetry_interval_seconds: ${DROVENAI_TELEMETRY_INTERVAL_SECONDS:30}

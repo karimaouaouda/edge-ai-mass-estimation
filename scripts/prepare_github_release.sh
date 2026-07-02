@@ -16,8 +16,11 @@ Options:
                             Default: models/weights/yolov8n-seg.engine
   --detector-weights PATH   PyTorch detector weights path.
                             Default: models/weights/yolo-seg-best.pt
-  --mass-weights PATH       Mass regression weights path.
-                            Default: models/weights/mass_regression.pt
+  --mass-model PATH         Residual mass model artifact path.
+                            Default: artifacts/mass_estimation/mass-model-feature-residuals/models/best_model.joblib
+  --mass-model-asset NAME   Release asset filename for the mass model.
+                            Default: mass_residual_best_model.joblib
+  --mass-weights PATH       Deprecated alias for --mass-model.
   --kaggle-model HANDLE     Kaggle Model instance or version handle, for example
                             owner/model/framework/variation or
                             owner/model/framework/variation/1.
@@ -32,12 +35,20 @@ Options:
   --kaggle-model-sha256 SHA Optional SHA-256 for the Kaggle model file.
   --pipeline-config PATH    Jetson pipeline config path.
                             Default: configs/pipeline/jetson_nano.yaml
+  --agent-config PATH       Jetson agent config path.
+                            Default: configs/agent/jetson_nano.yaml
+  --orchestrator-config PATH
+                            Jetson updater/orchestrator config path.
+                            Default: configs/orchestration/jetson_nano.yaml
   --wheel PATH              Wheel file path. Default: newest dist/edge_ai_mass*.whl.
   --no-engine               Do not include TensorRT engine.
   --no-detector-weights     Do not include PyTorch detector weights.
-  --no-mass-weights         Do not include mass regression weights.
+  --no-mass-model           Do not include the residual mass model.
+  --no-mass-weights         Deprecated alias for --no-mass-model.
   --no-kaggle-model         Do not include a Kaggle Model version rule.
   --no-pipeline-config      Do not include Jetson pipeline config.
+  --no-agent-config         Do not include Jetson agent config.
+  --no-orchestrator-config  Do not include Jetson updater/orchestrator config.
   --no-wheel                Do not include application wheel.
   --move                    Move artifacts into release folder instead of copying.
   --publish                 Create the GitHub Release with gh release create.
@@ -62,7 +73,8 @@ channel="dev"
 out_dir="release"
 engine_path="models/weights/yolov8n-seg.engine"
 detector_weights_path="models/weights/yolo-seg-best.pt"
-mass_weights_path="models/weights/mass_regression.pt"
+mass_model_path="artifacts/mass_estimation/mass-model-feature-residuals/models/best_model.joblib"
+mass_model_asset="mass_residual_best_model.joblib"
 kaggle_model=""
 kaggle_model_version=""
 kaggle_model_file=""
@@ -70,12 +82,16 @@ kaggle_model_name=""
 kaggle_model_dest="models/weights/yolo-seg-best.pt"
 kaggle_model_sha256=""
 pipeline_config_path="configs/pipeline/jetson_nano.yaml"
+agent_config_path="configs/agent/jetson_nano.yaml"
+orchestrator_config_path="configs/orchestration/jetson_nano.yaml"
 wheel_path=""
 include_engine=1
 include_detector_weights=1
-include_mass_weights=1
+include_mass_model=1
 include_kaggle_model=1
 include_pipeline_config=1
+include_agent_config=1
+include_orchestrator_config=1
 include_wheel=1
 move_files=0
 publish=0
@@ -108,8 +124,18 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --mass-weights)
-      mass_weights_path="${2:-}"
-      include_mass_weights=1
+      mass_model_path="${2:-}"
+      include_mass_model=1
+      shift 2
+      ;;
+    --mass-model)
+      mass_model_path="${2:-}"
+      include_mass_model=1
+      shift 2
+      ;;
+    --mass-model-asset)
+      mass_model_asset="${2:-}"
+      include_mass_model=1
       shift 2
       ;;
     --kaggle-model)
@@ -147,6 +173,16 @@ while [[ $# -gt 0 ]]; do
       include_pipeline_config=1
       shift 2
       ;;
+    --agent-config)
+      agent_config_path="${2:-}"
+      include_agent_config=1
+      shift 2
+      ;;
+    --orchestrator-config)
+      orchestrator_config_path="${2:-}"
+      include_orchestrator_config=1
+      shift 2
+      ;;
     --wheel)
       wheel_path="${2:-}"
       include_wheel=1
@@ -161,7 +197,11 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --no-mass-weights)
-      include_mass_weights=0
+      include_mass_model=0
+      shift
+      ;;
+    --no-mass-model)
+      include_mass_model=0
       shift
       ;;
     --no-kaggle-model)
@@ -170,6 +210,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-pipeline-config)
       include_pipeline_config=0
+      shift
+      ;;
+    --no-agent-config)
+      include_agent_config=0
+      shift
+      ;;
+    --no-orchestrator-config)
+      include_orchestrator_config=0
       shift
       ;;
     --no-wheel)
@@ -309,7 +357,8 @@ kaggle_model_version_ref() {
 stage_asset() {
   local source="$1"
   local missing_policy="$2"
-  local destination="${release_dir}/$(basename "$source")"
+  local asset_name="${3:-$(basename "$source")}"
+  local destination="${release_dir}/${asset_name}"
 
   if [[ ! -f "$source" ]]; then
     if [[ "$missing_policy" == "optional" ]]; then
@@ -322,10 +371,10 @@ stage_asset() {
 
   if [[ "$move_files" -eq 1 ]]; then
     mv "$source" "$destination"
-    echo "Moved $(basename "$source")"
+    echo "Moved ${asset_name}"
   else
     cp "$source" "$destination"
-    echo "Copied $(basename "$source")"
+    echo "Copied ${asset_name}"
   fi
   return 0
 }
@@ -438,10 +487,10 @@ if [[ "$include_detector_weights" -eq 1 ]] && stage_asset "$detector_weights_pat
   rule_lines+=("file|detection-yolo-weights|model|$asset|models/weights/$asset|$checksum|false")
 fi
 
-if [[ "$include_mass_weights" -eq 1 ]] && stage_asset "$mass_weights_path" "optional"; then
-  asset="$(basename "$mass_weights_path")"
+if [[ "$include_mass_model" -eq 1 ]] && stage_asset "$mass_model_path" "optional" "$mass_model_asset"; then
+  asset="$mass_model_asset"
   checksum="$(sha256_file "${release_dir}/${asset}")"
-  rule_lines+=("file|mass-regression-weights|model|$asset|models/weights/$asset|$checksum|false")
+  rule_lines+=("file|mass-residual-model|model|$asset|models/weights/$asset|$checksum|false")
 fi
 
 if [[ "$include_kaggle_model" -eq 1 && -n "$kaggle_model" && -n "$kaggle_model_file" ]]; then
@@ -467,6 +516,18 @@ if [[ "$include_pipeline_config" -eq 1 ]] && stage_asset "$pipeline_config_path"
   asset="$(basename "$pipeline_config_path")"
   checksum="$(sha256_file "${release_dir}/${asset}")"
   rule_lines+=("file|jetson-pipeline-config|config|$asset|configs/pipeline/$asset|$checksum|true")
+fi
+
+if [[ "$include_agent_config" -eq 1 ]] && stage_asset "$agent_config_path" "required" "agent_jetson_nano.yaml"; then
+  asset="agent_jetson_nano.yaml"
+  checksum="$(sha256_file "${release_dir}/${asset}")"
+  rule_lines+=("file|jetson-agent-config|config|$asset|configs/agent/jetson_nano.yaml|$checksum|true")
+fi
+
+if [[ "$include_orchestrator_config" -eq 1 ]] && stage_asset "$orchestrator_config_path" "required" "orchestration_jetson_nano.yaml"; then
+  asset="orchestration_jetson_nano.yaml"
+  checksum="$(sha256_file "${release_dir}/${asset}")"
+  rule_lines+=("file|jetson-orchestrator-config|config|$asset|configs/orchestration/jetson_nano.yaml|$checksum|true")
 fi
 
 if [[ "$include_wheel" -eq 1 ]] && stage_asset "$wheel_path" "optional"; then

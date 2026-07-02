@@ -64,6 +64,7 @@ class ObjectEstimate:
     material: str | None = None
     mass_kg: float | None = None
     mass_method: str = ""       # "density", "regression", "hybrid", "2d_prior"
+    mass_features: dict[str, Any] = field(default_factory=dict)
     calibration_id: str | None = None
     depth_scale_id: str | None = None
     background_id: str | None = None
@@ -79,6 +80,7 @@ class ObjectEstimate:
             "material": self.material,
             "mass_kg": self.mass_kg,
             "mass_method": self.mass_method,
+            "mass_features": self.mass_features,
             "calibration_id": self.calibration_id,
             "depth_scale_id": self.depth_scale_id,
             "background_id": self.background_id,
@@ -344,10 +346,16 @@ class Pipeline:
                     "mask": det.mask,
                     "class_id": det.class_id,
                     "class_name": det.class_name,
+                    "confidence": det.confidence,
                     "depth_stats": obj.depth_stats,
                     "geometry": obj.geometry,
                     "volume_m3": obj.volume_m3,
                     "image_crop": _crop(image, det.bbox),
+                    "image_shape": image.shape,
+                    "calibration_id": obj.calibration_id,
+                    "depth_scale_id": obj.depth_scale_id,
+                    "background_id": obj.background_id,
+                    "warnings": list(obj.warnings),
                 }
                 mass_result = mass_stage.run(image, features=features)
                 obj.mass_kg = mass_result.data.get("mass_kg")
@@ -355,6 +363,7 @@ class Pipeline:
                 obj.volume_method = mass_result.data.get("volume_method", obj.volume_method)
                 obj.material = mass_result.data.get("material")
                 obj.mass_method = mass_result.metadata.get("method", "unknown")
+                obj.mass_features = mass_result.data.get("mass_features", {})
                 obj.warnings.extend(mass_result.data.get("warnings", []))
                 result.objects.append(obj)
                 mass_latency_ms += mass_result.latency_ms
@@ -407,23 +416,48 @@ def _crop(image: np.ndarray, bbox: np.ndarray) -> np.ndarray:
 def _depth_stats_for_detection(
     depth_map: np.ndarray, det: Detection
 ) -> dict[str, float]:
-    """Compute mean / median / std depth inside the object region."""
+    """Compute robust depth statistics inside the object region."""
     if det.mask is not None:
         mask = _mask_for_depth_map(depth_map, det.mask)
-        pixels = depth_map[mask > 0]
+        region = depth_map[mask > 0]
     else:
         x1, y1, x2, y2 = det.bbox.astype(int)
-        pixels = depth_map[y1:y2, x1:x2].ravel()
+        region = depth_map[y1:y2, x1:x2].ravel()
 
-    if pixels.size == 0:
-        return {"mean": 0.0, "median": 0.0, "std": 0.0, "min": 0.0, "max": 0.0}
+    region = np.asarray(region, dtype=np.float32).reshape(-1)
+    valid = region[np.isfinite(region) & (region > 0)]
+    if region.size == 0 or valid.size == 0:
+        return {
+            "mean": 0.0,
+            "median": 0.0,
+            "std": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "range": 0.0,
+            "p10": 0.0,
+            "p90": 0.0,
+            "iqr": 0.0,
+            "valid_ratio": 0.0,
+        }
+
+    p10 = float(np.percentile(valid, 10))
+    p90 = float(np.percentile(valid, 90))
+    q25 = float(np.percentile(valid, 25))
+    q75 = float(np.percentile(valid, 75))
+    min_depth = float(np.min(valid))
+    max_depth = float(np.max(valid))
 
     return {
-        "mean": float(np.mean(pixels)),
-        "median": float(np.median(pixels)),
-        "std": float(np.std(pixels)),
-        "min": float(np.min(pixels)),
-        "max": float(np.max(pixels)),
+        "mean": float(np.mean(valid)),
+        "median": float(np.median(valid)),
+        "std": float(np.std(valid)),
+        "min": min_depth,
+        "max": max_depth,
+        "range": max_depth - min_depth,
+        "p10": p10,
+        "p90": p90,
+        "iqr": q75 - q25,
+        "valid_ratio": float(valid.size / max(region.size, 1)),
     }
 
 

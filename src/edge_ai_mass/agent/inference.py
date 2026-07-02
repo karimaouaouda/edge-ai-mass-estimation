@@ -310,6 +310,7 @@ def _normalize_object(obj: ObjectEstimate) -> dict[str, Any]:
         "features": {
             "volume_m3": obj.volume_m3,
             "volume_method": obj.volume_method,
+            "mass_features": obj.mass_features,
             "depth_stats": obj.depth_stats,
             "warnings": obj.warnings,
             "calibration_id": obj.calibration_id,

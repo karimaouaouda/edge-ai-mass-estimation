@@ -15,6 +15,23 @@ For a one-shot update check:
 edge-ai-orchestrator --config configs/orchestration/jetson_nano.yaml --once
 ```
 
+The backend-facing agent can also run the same updater automatically. In
+`configs/agent/jetson_nano.yaml`, the `updates` block is enabled by default on
+Jetson:
+
+```yaml
+updates:
+  enabled: true
+  config_path: configs/orchestration/jetson_nano.yaml
+  run_on_start: true
+  poll_interval_seconds: 21600
+```
+
+When enabled, the agent checks GitHub Releases before inference preloading and
+then repeats the check on the configured interval. Installed model or config
+updates clear the loaded inference runner so the next inference uses the new
+artifacts.
+
 ## Update Sources
 
 GitHub Releases should publish an `edge-ai-update-manifest.json` asset. If that manifest is missing, the orchestrator falls back to the `install_plan` in `configs/orchestration/jetson_nano.yaml`.

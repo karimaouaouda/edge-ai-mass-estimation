@@ -1,4 +1,8 @@
-# Improvements and Critical Points For the First Version of the Thesis
+- About Dashboard I added Screen shots about it.
 
-## Layout and Structure
-- in Aknowledgement, u must make it diff from normal section (diff font, diff spaces), it can be suit if it take the full page.
+
+
+- I added a screenshots about docker running apps.
+
+
+- `important:` : while i was working a project I opened a pull request to kaggle cli adding a missing piece on kernels automation pipeline, [click here](https://github.com/Kaggle/kaggle-cli/pull/1046) to see the pull request.

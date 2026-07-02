@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 
 import numpy as np
 import pytest
@@ -41,6 +42,7 @@ def test_normalize_pipeline_result_matches_backend_inference_payload():
         material="plastic",
         mass_kg=0.1205,
         mass_method="depth_estimate",
+        mass_features={"mass_base_g": 100.0, "selected_volume_cm3": 250.0},
     )
     result = PipelineResult(objects=[obj], frame_time_ms=142.0)
 
@@ -60,6 +62,7 @@ def test_normalize_pipeline_result_matches_backend_inference_payload():
     assert payload["objects"][0]["class_label"] == "plastic_bottle"
     assert payload["objects"][0]["bbox"] == {"x": 10.0, "y": 20.0, "w": 100.0, "h": 140.0}
     assert payload["objects"][0]["estimated_mass_grams"] == pytest.approx(120.5)
+    assert payload["objects"][0]["features"]["mass_features"]["mass_base_g"] == pytest.approx(100.0)
 
 
 def test_inference_stage_reporter_reuses_stage_identity_and_timestamps():
@@ -82,6 +85,32 @@ def test_inference_stage_reporter_reuses_stage_identity_and_timestamps():
     assert updates[1]["progress_percent"] == 45
     assert updates[1]["request_id"] == "request-1"
     assert updates[1]["correlation_id"] == "correlation-1"
+
+
+def test_agent_config_parses_auto_update_settings(tmp_path):
+    config = AgentConfig.from_mapping(
+        {
+            "device": {"id": "jetson-01"},
+            "updates": {
+                "enabled": True,
+                "config_path": "configs/orchestration/jetson_nano.yaml",
+                "run_on_start": False,
+                "poll_interval_seconds": 120,
+                "target": "model",
+                "force": True,
+                "release_tag": "v0.1.0",
+            },
+            "runtime": {"outbox_path": str(tmp_path)},
+        }
+    )
+
+    assert config.updates.enabled is True
+    assert config.updates.config_path == "configs/orchestration/jetson_nano.yaml"
+    assert config.updates.run_on_start is False
+    assert config.updates.poll_interval_seconds == pytest.approx(120.0)
+    assert config.updates.target == "model"
+    assert config.updates.force is True
+    assert config.updates.release_tag == "v0.1.0"
 
 
 def test_firmware_manager_verifies_signature_and_compatibility_before_install():
@@ -178,6 +207,32 @@ def test_model_manager_activates_local_component_and_updates_versions(tmp_path):
     assert active_path.read_bytes() == b"engine"
     assert result["active_models"]["detector"] == "v2.1.0"
     assert result["activated_components"][0]["active_path"] == str(active_path)
+    assert manager.active_artifact_path("detector") == active_path
+
+
+def test_model_manager_resolves_active_mass_artifact_path(tmp_path):
+    source = tmp_path / "best_model.joblib"
+    source.write_bytes(b"mass-model")
+    manager = ModelManager(tmp_path / "models")
+
+    manager.deploy(
+        {
+            "target_device_id": "jetson-01",
+            "components": [
+                {
+                    "task": "mass",
+                    "version": "mass-v2",
+                    "source_type": "local",
+                    "source_uri": str(source),
+                }
+            ],
+        },
+        device_id="jetson-01",
+    )
+
+    assert manager.active_artifact_path("mass") == (
+        tmp_path / "models" / "mass" / "mass-v2" / "best_model.joblib"
+    )
 
 
 def test_model_manager_refuses_wrong_target_device(tmp_path):
@@ -403,6 +458,88 @@ class FixedTelemetry:
         }
 
 
+class FakeUpdateResult:
+    def __init__(self, *, changed=False, message="No updates were installed"):
+        self.changed = changed
+        self.message = message
+
+
+def test_agent_checks_for_updates_before_preloading_inference(tmp_path):
+    order = []
+
+    class FakeUpdater:
+        def __init__(self):
+            self.calls = []
+
+        def check_for_updates(self, *, target=None, force=False, release_tag=None):
+            order.append("update")
+            self.calls.append(
+                {"target": target, "force": force, "release_tag": release_tag}
+            )
+            return FakeUpdateResult()
+
+    updater = FakeUpdater()
+
+    def preload_inference():
+        order.append("preload")
+        return object()
+
+    config = AgentConfig.from_mapping(
+        {
+            "device": {"id": "jetson-01", "capabilities": {"inference": True}},
+            "updates": {
+                "enabled": True,
+                "run_on_start": True,
+                "poll_interval_seconds": 60,
+                "target": "all",
+            },
+            "runtime": {
+                "telemetry_transport": "mqtt",
+                "outbox_path": str(tmp_path),
+            },
+        }
+    )
+    mqtt = RecordingMqtt()
+    agent = EdgeDeviceAgent(
+        config,
+        http_client=object(),
+        mqtt_client=mqtt,
+        telemetry=FixedTelemetry(),
+        inference_runner_factory=preload_inference,
+        auto_updater_factory=lambda: updater,
+    )
+
+    agent.start()
+
+    assert order == ["update", "preload"]
+    assert updater.calls == [{"target": "all", "force": False, "release_tag": None}]
+    assert len(mqtt.telemetry_envelopes) == 1
+
+
+def test_agent_clears_loaded_inference_runner_after_auto_update(tmp_path):
+    class FakeUpdater:
+        def check_for_updates(self, **_kwargs):
+            return FakeUpdateResult(changed=True, message="Installed 2 assets")
+
+    config = AgentConfig.from_mapping(
+        {
+            "device": {"id": "jetson-01"},
+            "updates": {"enabled": True, "run_on_start": False},
+            "runtime": {"outbox_path": str(tmp_path)},
+        }
+    )
+    agent = EdgeDeviceAgent(
+        config,
+        telemetry=FixedTelemetry(),
+        auto_updater_factory=FakeUpdater,
+    )
+    agent._inference_runner = object()
+
+    agent._check_for_updates(reason="unit-test")
+
+    assert agent._inference_runner is None
+
+
 def test_agent_preloads_inference_before_starting_mqtt(tmp_path):
     startup_order = []
     preloaded_runner = object()
@@ -568,6 +705,70 @@ def test_agent_publishes_failed_stage_before_inference_failure(tmp_path):
     ]
     assert mqtt.events[-2]["payload"]["status"] == "failed"
     assert mqtt.events[-2]["payload"]["metadata"]["error"] == "detector unavailable"
+
+
+def test_agent_mass_deployment_refreshes_inference_runner_and_model_path(tmp_path, monkeypatch):
+    mass_artifact = tmp_path / "best_model.joblib"
+    mass_artifact.write_bytes(b"mass-model")
+
+    class FakeModelManager:
+        def deploy(self, payload, *, device_id):
+            assert device_id == "jetson-01"
+            return {
+                "deployment_id": payload.get("deployment_id"),
+                "activated_components": [
+                    {
+                        "task": "mass",
+                        "version": "mass-v2",
+                        "source": str(mass_artifact),
+                        "active_path": str(mass_artifact),
+                    }
+                ],
+                "active_models": {"mass": "mass-v2"},
+                "restart_agent": False,
+            }
+
+        def active_artifact_path(self, task):
+            return mass_artifact if task == "mass" else None
+
+    monkeypatch.delenv("EDGE_AI_MASS_MODEL_PATH", raising=False)
+    config = AgentConfig.from_mapping(
+        {
+            "device": {"id": "jetson-01"},
+            "runtime": {
+                "telemetry_transport": "mqtt",
+                "outbox_path": str(tmp_path / "outbox"),
+            },
+        }
+    )
+    mqtt = RecordingMqtt()
+    agent = EdgeDeviceAgent(
+        config,
+        mqtt_client=mqtt,
+        telemetry=FixedTelemetry(),
+        model_manager=FakeModelManager(),
+    )
+    agent._inference_runner = object()
+    command = new_envelope(
+        device_id="jetson-01",
+        event_name="model_deployment.requested",
+        payload={
+            "deployment_id": "deploy-1",
+            "components": [{"task": "mass", "version": "mass-v2"}],
+        },
+        correlation_id="correlation-1",
+        request_id="request-1",
+    )
+
+    agent.handle_command(command)
+
+    assert agent._inference_runner is None
+    assert agent.active_models["mass"] == "mass-v2"
+    assert os.environ["EDGE_AI_MASS_MODEL_PATH"] == str(mass_artifact)
+    assert [event["event_name"] for event in mqtt.events] == [
+        "model_deployment.started",
+        "model_deployment.succeeded",
+    ]
 
 
 def test_agent_firmware_command_fails_closed_when_secure_executor_is_unavailable(tmp_path):

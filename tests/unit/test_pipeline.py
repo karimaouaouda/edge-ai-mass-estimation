@@ -51,6 +51,9 @@ def test_depth_stats_with_mask():
     stats = _depth_stats_for_detection(depth, det)
     assert stats["mean"] == 2.0
     assert stats["std"] == 0.0
+    assert stats["p10"] == 2.0
+    assert stats["p90"] == 2.0
+    assert stats["valid_ratio"] == 1.0
 
 
 def test_depth_stats_resizes_mask_to_depth_shape():
@@ -83,6 +86,32 @@ def test_depth_stats_bbox_only():
     stats = _depth_stats_for_detection(depth, det)
     assert "mean" in stats
     assert "median" in stats
+    assert "iqr" in stats
+
+
+def test_depth_stats_ignore_invalid_pixels_and_report_valid_ratio():
+    depth = np.array(
+        [
+            [1.0, 2.0, 0.0],
+            [np.nan, 3.0, 4.0],
+            [5.0, 6.0, 7.0],
+        ],
+        dtype=np.float32,
+    )
+    det = Detection(
+        bbox=np.array([0, 0, 3, 3]),
+        mask=None,
+        class_id=1,
+        class_name="glass",
+        confidence=0.8,
+    )
+
+    stats = _depth_stats_for_detection(depth, det)
+
+    assert stats["mean"] == np.mean([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0])
+    assert stats["min"] == 1.0
+    assert stats["max"] == 7.0
+    assert stats["valid_ratio"] == 7 / 9
 
 
 def test_stage_keeps_slow_segmentation_primary_when_latency_fallback_is_disabled():

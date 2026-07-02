@@ -62,6 +62,51 @@ stages:
   mass:
     latency_budget_ms: 30
     primary:
+      class: edge_ai_mass.modules.mass.residual_estimator.ResidualMassEstimator
+      params:
+        model_path: ${EDGE_AI_MASS_MODEL_PATH:models/weights/mass_residual_best_model.joblib}
+        require_model: true
+        clamp_nonnegative_mass: true
+        default_pixel_to_m: ${EDGE_AI_PIXEL_TO_M:0.001}
+        default_thickness_m: ${EDGE_AI_DEFAULT_THICKNESS_M:0.01}
+        default_background_depth_m: ${EDGE_AI_BACKGROUND_DEPTH_M:1.0}
+        runtime_label_confidence: 1.0
+        baseline_method: volume_density
+        class_to_material:
+          plastic_battle: plastic
+          plastic_bottle: plastic
+          rigid_plastic: plastic
+          plastic_bag: plastic
+          metal_can: metal
+          glass: glass
+          paper_cardboard: cardboard
+          organic_waste: organic
+          mixed_waste: other
+          textile_trash: textile
+          vegetation: organic
+        density_priors_kg_m3:
+          plastic: 40.0
+          glass: 300.0
+          metal: 160.0
+          paper: 90.0
+          cardboard: 60.0
+          organic: 500.0
+          textile: 120.0
+          wood: 250.0
+          other: 100.0
+        hollow_priors:
+          plastic_battle: 1.0
+          plastic_bottle: 1.0
+          rigid_plastic: 0.4
+          plastic_bag: 0.4
+          metal_can: 1.0
+          glass: 0.7
+          paper_cardboard: 0.2
+          organic_waste: 0.0
+          mixed_waste: 0.5
+          textile_trash: 0.5
+          vegetation: 0.0
+    fallback:
       class: edge_ai_mass.modules.mass.density_estimator.DensityMassEstimator
       params:
         class_to_material:
@@ -74,4 +119,15 @@ stages:
           paper_cardboard: cardboard
           organic_waste: organic
           mixed_waste: other
-    # No regression fallback on Jetson — density is fast enough
+          textile_trash: textile
+          vegetation: organic
+        densities:
+          plastic: 40.0
+          glass: 300.0
+          metal: 160.0
+          paper: 90.0
+          cardboard: 60.0
+          organic: 500.0
+          textile: 120.0
+          wood: 250.0
+          other: 100.0

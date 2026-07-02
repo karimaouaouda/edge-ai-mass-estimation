@@ -65,6 +65,27 @@ class ModelManager:
             "restart_agent": bool(payload.get("restart_agent", False)),
         }
 
+    def active_artifact_path(self, task: str, version: str | None = None) -> Path | None:
+        """Return the active artifact file for a deployed task/version if present."""
+
+        active_version = str(version or self.active_models.get(task) or "").strip()
+        if not active_version:
+            return None
+        directory = self.model_dir / task / active_version
+        if not directory.is_dir():
+            return None
+        candidates = sorted(
+            path for path in directory.iterdir() if path.is_file() and not path.name.startswith(".")
+        )
+        if not candidates:
+            return None
+        preferred_extensions = _preferred_extensions(task)
+        for extension in preferred_extensions:
+            for candidate in candidates:
+                if candidate.suffix.lower() == extension:
+                    return candidate
+        return candidates[0]
+
     def _activate_component(self, component: dict[str, Any]) -> ActivatedComponent:
         task = str(component.get("task") or "").strip()
         version = str(component.get("version") or "").strip()
@@ -144,3 +165,13 @@ def _atomic_copy(source: Path, destination: Path) -> None:
     tmp = destination.with_name(f".{destination.name}.tmp")
     shutil.copy2(source, tmp)
     os.replace(tmp, destination)
+
+
+def _preferred_extensions(task: str) -> tuple[str, ...]:
+    if task == "mass":
+        return (".joblib", ".pkl", ".pickle", ".onnx", ".pt")
+    if task == "detector":
+        return (".engine", ".pt", ".onnx")
+    if task == "depth":
+        return (".engine", ".pt", ".onnx")
+    return (".joblib", ".pkl", ".pt", ".onnx")
