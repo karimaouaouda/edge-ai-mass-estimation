@@ -54,6 +54,10 @@ wandb/
 .DS_Store
 Thumbs.db
 
+*.png
+*.jpg
+*.jpeg
+*.pdf
 # Calibration images (keep configs only)
 data/calibration/images/
 !data/calibration/.gitkeep
