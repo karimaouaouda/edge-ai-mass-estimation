@@ -6,7 +6,7 @@ device:
   name: ${EDGE_AI_DEVICE_NAME:Jetson Nano}
   type: jetson_nano
   firmware_version: ${EDGE_AI_FIRMWARE_VERSION:unknown}
-  agent_version: ${EDGE_AI_AGENT_VERSION:0.1.1}
+  agent_version: ${EDGE_AI_AGENT_VERSION:0.1.3}
   capabilities:
     inference: true
     preview: true
@@ -22,6 +22,33 @@ backend:
   request_timeout_seconds: ${DROVENAI_BACKEND_TIMEOUT_SECONDS:10}
   max_retries: ${DROVENAI_BACKEND_MAX_RETRIES:3}
   retry_backoff_seconds: ${DROVENAI_BACKEND_RETRY_BACKOFF_SECONDS:0.5}
+
+host_inference:
+  # Optional host-side primary-model execution provider. The edge pipeline still
+  # loads and tries its local primary first. If that primary fails, the agent
+  # pings the matching host stage endpoint; if the host is healthy it runs that
+  # host primary before using the local edge fallback.
+  enabled: ${EDGE_AI_HOST_INFERENCE_ENABLED:false}
+  scheme: ${EDGE_AI_HOST_INFERENCE_SCHEME:http}
+  host: ${EDGE_AI_HOST_INFERENCE_HOST:127.0.0.1}
+  port: ${EDGE_AI_HOST_INFERENCE_PORT:8090}
+  # Optional full URL override, e.g. http://gpu-host.local:8090
+  base_url: ${EDGE_AI_HOST_INFERENCE_BASE_URL:}
+  request_timeout_seconds: ${EDGE_AI_HOST_INFERENCE_TIMEOUT_SECONDS:15}
+  health_timeout_seconds: ${EDGE_AI_HOST_INFERENCE_HEALTH_TIMEOUT_SECONDS:2}
+  # Used only when the host is asked to load and smoke-test a stage primary.
+  # Depth models can need this much time on first download/startup.
+  load_timeout_seconds: ${EDGE_AI_HOST_INFERENCE_LOAD_TIMEOUT_SECONDS:180}
+  stages:
+    detection:
+      enabled: ${EDGE_AI_HOST_INFERENCE_DETECTION_ENABLED:true}
+      endpoint_stage: detection
+    depth:
+      enabled: ${EDGE_AI_HOST_INFERENCE_DEPTH_ENABLED:true}
+      endpoint_stage: depth
+    mass:
+      enabled: ${EDGE_AI_HOST_INFERENCE_MASS_ENABLED:true}
+      endpoint_stage: mass
 
 mqtt:
   host: ${DROVENAI_MQTT_HOST:127.0.0.1}

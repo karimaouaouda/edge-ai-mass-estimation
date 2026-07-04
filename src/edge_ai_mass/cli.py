@@ -75,6 +75,27 @@ def main(argv: list[str] | None = None) -> None:
         help="Submit one telemetry payload and exit",
     )
 
+    p_host = sub.add_parser("host-server", help="Run host-side stage inference server")
+    p_host.add_argument("--config", default="configs/pipeline/default.yaml")
+    p_host.add_argument("--host", default="0.0.0.0")
+    p_host.add_argument("--port", type=int, default=8090)
+    p_host.add_argument(
+        "--models-dir",
+        default="models",
+        help="Project-local directory for host weights and model caches",
+    )
+    p_host.add_argument(
+        "--preload",
+        action="store_true",
+        help="Load and smoke-test host primary models before accepting requests",
+    )
+    p_host.add_argument(
+        "--skip-primary-validation",
+        action="store_true",
+        help="Load host primary models without running smoke-test inference",
+    )
+    p_host.add_argument("--server-log-level", default="info")
+
     p_train = sub.add_parser("train", help="Run the governed model training pipeline")
     p_train.add_argument(
         "--config",
@@ -176,6 +197,8 @@ def main(argv: list[str] | None = None) -> None:
         _cmd_orchestrator(args)
     elif args.command == "agent":
         _cmd_agent(args)
+    elif args.command == "host-server":
+        _cmd_host_server(args)
     elif args.command == "train":
         _cmd_train(args)
     elif args.command == "mass":
@@ -343,6 +366,20 @@ def _cmd_agent(args: argparse.Namespace) -> None:
         return
 
     EdgeDeviceAgent(config, secret_store=secret_store).run_forever()
+
+
+def _cmd_host_server(args: argparse.Namespace) -> None:
+    from edge_ai_mass.host.server import run_server
+
+    run_server(
+        config_path=args.config,
+        host=args.host,
+        port=args.port,
+        preload=args.preload,
+        models_dir=args.models_dir,
+        validate_primary=not args.skip_primary_validation,
+        log_level=args.server_log_level,
+    )
 
 
 def _cmd_train(args: argparse.Namespace) -> None:

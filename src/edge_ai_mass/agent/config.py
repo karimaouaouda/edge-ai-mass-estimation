@@ -72,6 +72,45 @@ class RuntimeSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class HostStageSettings:
+    """Per-stage host execution settings."""
+
+    enabled: bool = True
+    endpoint_stage: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class HostInferenceSettings:
+    """Optional host-side inference provider for edge primary-model failures."""
+
+    enabled: bool = False
+    scheme: str = "http"
+    host: str = "127.0.0.1"
+    port: int = 8090
+    base_url: str = ""
+    request_timeout_seconds: float = 10.0
+    health_timeout_seconds: float = 2.0
+    load_timeout_seconds: float = 120.0
+    stages: dict[str, HostStageSettings] = field(default_factory=dict)
+
+    @property
+    def resolved_base_url(self) -> str:
+        if self.base_url:
+            return self.base_url.rstrip("/")
+        return f"{self.scheme}://{self.host}:{self.port}".rstrip("/")
+
+    def stage_enabled(self, stage_name: str) -> bool:
+        stage = self.stages.get(stage_name)
+        return self.enabled and (stage.enabled if stage is not None else True)
+
+    def endpoint_stage(self, stage_name: str) -> str:
+        stage = self.stages.get(stage_name)
+        if stage is None or not stage.endpoint_stage:
+            return stage_name
+        return stage.endpoint_stage
+
+
+@dataclass(frozen=True, slots=True)
 class AutoUpdateSettings:
     """Periodic GitHub Release update checks performed by the agent."""
 
@@ -92,6 +131,7 @@ class AgentConfig:
     backend: BackendSettings = field(default_factory=BackendSettings)
     mqtt: MQTTSettings = field(default_factory=MQTTSettings)
     runtime: RuntimeSettings = field(default_factory=RuntimeSettings)
+    host_inference: HostInferenceSettings = field(default_factory=HostInferenceSettings)
     updates: AutoUpdateSettings = field(default_factory=AutoUpdateSettings)
 
     @classmethod
@@ -106,6 +146,7 @@ class AgentConfig:
         backend_raw = raw.get("backend") or {}
         mqtt_raw = raw.get("mqtt") or {}
         runtime_raw = raw.get("runtime") or {}
+        host_inference_raw = raw.get("host_inference") or raw.get("host") or {}
         updates_raw = raw.get("updates") or {}
 
         device_id = str(device_raw.get("id") or raw.get("device_id") or "").strip()
@@ -196,6 +237,8 @@ class AgentConfig:
             ),
         )
 
+        host_inference = _host_inference_settings(host_inference_raw)
+
         poll_interval = updates_raw.get("poll_interval_seconds")
         updates = AutoUpdateSettings(
             enabled=_as_bool(updates_raw.get("enabled", False)),
@@ -220,6 +263,7 @@ class AgentConfig:
             backend=backend,
             mqtt=mqtt,
             runtime=runtime,
+            host_inference=host_inference,
             updates=updates,
         )
 
@@ -267,3 +311,39 @@ def _optional_string(value: Any) -> str | None:
     if value in (None, ""):
         return None
     return str(value)
+
+
+def _host_inference_settings(raw: dict[str, Any]) -> HostInferenceSettings:
+    if not isinstance(raw, dict):
+        raw = {}
+    stages = _host_stage_settings(raw.get("stages") or {})
+    return HostInferenceSettings(
+        enabled=_as_bool(raw.get("enabled", False)),
+        scheme=str(raw.get("scheme") or "http"),
+        host=str(raw.get("host") or "127.0.0.1"),
+        port=int(raw.get("port", 8090)),
+        base_url=str(raw.get("base_url") or "").rstrip("/"),
+        request_timeout_seconds=float(raw.get("request_timeout_seconds", 10.0)),
+        health_timeout_seconds=float(raw.get("health_timeout_seconds", 2.0)),
+        load_timeout_seconds=float(raw.get("load_timeout_seconds", 120.0)),
+        stages=stages,
+    )
+
+
+def _host_stage_settings(raw: dict[str, Any]) -> dict[str, HostStageSettings]:
+    if not isinstance(raw, dict):
+        return {}
+    result: dict[str, HostStageSettings] = {}
+    for name, value in raw.items():
+        stage_name = str(name)
+        if isinstance(value, bool):
+            result[stage_name] = HostStageSettings(enabled=value)
+            continue
+        if not isinstance(value, dict):
+            result[stage_name] = HostStageSettings(enabled=_as_bool(value))
+            continue
+        result[stage_name] = HostStageSettings(
+            enabled=_as_bool(value.get("enabled", True)),
+            endpoint_stage=str(value.get("endpoint_stage") or stage_name),
+        )
+    return result

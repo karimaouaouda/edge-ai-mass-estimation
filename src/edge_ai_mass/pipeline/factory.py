@@ -21,13 +21,13 @@ logger = logging.getLogger(__name__)
 
 
 def show_env() -> None:
-    print("python =", sys.executable)
-    print("cwd =", os.getcwd())
-    print("USER =", os.environ.get("USER"))
-    print("CONDA_PREFIX =", os.environ.get("CONDA_PREFIX"))
-    print("LD_PRELOAD =", os.environ.get("LD_PRELOAD"))
-    print("LD_LIBRARY_PATH =", os.environ.get("LD_LIBRARY_PATH"))
-    print("PATH =", os.environ.get("PATH"))
+    logger.debug("python = %s", sys.executable)
+    logger.debug("cwd = %s", os.getcwd())
+    logger.debug("USER = %s", os.environ.get("USER"))
+    logger.debug("CONDA_PREFIX = %s", os.environ.get("CONDA_PREFIX"))
+    logger.debug("LD_PRELOAD = %s", os.environ.get("LD_PRELOAD"))
+    logger.debug("LD_LIBRARY_PATH = %s", os.environ.get("LD_LIBRARY_PATH"))
+    logger.debug("PATH = %s", os.environ.get("PATH"))
 
 
 def _instantiate_module(spec: dict[str, Any]) -> BaseModule:
@@ -36,7 +36,7 @@ def _instantiate_module(spec: dict[str, Any]) -> BaseModule:
     show_env()
     class_path: str = spec["class"]
     module_path, class_name = class_path.rsplit(".", 1)
-    print(f"Instantiating module: {class_path} with params: {spec.get('params', {})}")
+    logger.debug("Instantiating module: %s with params: %s", class_path, spec.get("params", {}))
     mod = importlib.import_module(module_path)
     cls = getattr(mod, class_name)
     return cls(config=spec.get("params", {}))

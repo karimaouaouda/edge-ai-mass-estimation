@@ -130,16 +130,20 @@ class Stage:
         name: str,
         primary: BaseModule,
         fallback: BaseModule | None = None,
+        host_provider: BaseModule | None = None,
         latency_budget_ms: float = float("inf"),
         fallback_on_latency_exceeded: bool = True,
     ) -> None:
         self.name = name
         self.primary = primary
         self.fallback = fallback
+        self.host_provider = host_provider
         self.latency_budget_ms = latency_budget_ms
         self.fallback_on_latency_exceeded = fallback_on_latency_exceeded
         self.primary_available = True
         self.primary_error: str | None = None
+        self.host_available: bool | None = None
+        self.host_error: str | None = None
 
     def run(self, image: np.ndarray, **kwargs: Any) -> ModuleResult:
         fallback_reason = "primary_unavailable"
@@ -165,17 +169,56 @@ class Stage:
                     self.latency_budget_ms,
                 )
             except Exception as exc:
-                if self.fallback is None:
+                if self.fallback is None and self.host_provider is None:
                     raise
                 fallback_reason = "primary_error"
                 primary_error = str(exc)
-                logger.exception("%s primary failed — trying fallback", self.name)
+                logger.exception("%s primary failed; trying host/fallback", self.name)
+
+        if fallback_reason in {"primary_error", "primary_unavailable"}:
+            host_result = self._try_host_provider(
+                image,
+                fallback_reason=fallback_reason,
+                primary_error=primary_error,
+                **kwargs,
+            )
+            if host_result is not None:
+                return host_result
 
         if self.fallback is None:
             raise RuntimeError(f"{self.name}: primary failed and no fallback configured")
 
         result = self.fallback.predict(image, **kwargs)
         result.metadata["source"] = f"{self.name}.fallback"
+        result.metadata["fallback_reason"] = fallback_reason
+        if primary_error:
+            result.metadata["primary_error"] = primary_error
+        if self.host_error:
+            result.metadata["host_error"] = self.host_error
+        return result
+
+    def _try_host_provider(
+        self,
+        image: np.ndarray,
+        *,
+        fallback_reason: str,
+        primary_error: str | None,
+        **kwargs: Any,
+    ) -> ModuleResult | None:
+        """Run the host primary before falling back to the edge fallback."""
+
+        if self.host_provider is None or self.host_available is False:
+            return None
+        try:
+            result = self.host_provider.predict(image, **kwargs)
+        except Exception as exc:
+            self.host_available = False
+            self.host_error = str(exc)
+            logger.warning("%s host provider failed; trying edge fallback: %s", self.name, exc)
+            return None
+        self.host_available = True
+        self.host_error = None
+        result.metadata["source"] = f"{self.name}.host_primary"
         result.metadata["fallback_reason"] = fallback_reason
         if primary_error:
             result.metadata["primary_error"] = primary_error
@@ -209,7 +252,28 @@ class Pipeline:
             try:
                 stage.primary.load()
             except Exception as exc:
-                if stage.fallback is None:
+                host_loaded = False
+                if stage.host_provider is not None:
+                    try:
+                        stage.host_provider.load()
+                        stage.host_available = True
+                        host_loaded = True
+                        logger.warning(
+                            "%s primary failed during load; host provider is ready: %s",
+                            name,
+                            exc,
+                        )
+                    except Exception as host_exc:
+                        stage.host_available = False
+                        stage.host_error = str(host_exc)
+                        logger.warning(
+                            "%s primary and host provider failed during load: "
+                            "primary=%s host=%s",
+                            name,
+                            exc,
+                            host_exc,
+                        )
+                if stage.fallback is None and not host_loaded:
                     raise
                 logger.warning("%s primary failed during load; disabling primary: %s", name, exc)
                 stage.primary_available = False

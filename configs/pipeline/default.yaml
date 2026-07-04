@@ -60,17 +60,23 @@ stages:
       params:
         model_name: depth-anything/Depth-Anything-V2-Small-hf
         input_size: 384
+        cache_dir: ${EDGE_AI_DEPTH_MODEL_CACHE_DIR:models/depth/huggingface}
+        debug_outputs: ${EDGE_AI_DEPTH_DEBUG_OUTPUTS:false}
+        debug_dir: ${EDGE_AI_DEPTH_DEBUG_DIR:models/debug/depth}
     fallback:
       class: edge_ai_mass.modules.depth.depth_anything.MiDaSDepthModule
       params:
         model_type: MiDaS_small
+        torch_hub_dir: ${EDGE_AI_TORCH_HUB_DIR:models/torch/hub}
+        debug_outputs: ${EDGE_AI_DEPTH_DEBUG_OUTPUTS:false}
+        debug_dir: ${EDGE_AI_DEPTH_DEBUG_DIR:models/debug/depth}
 
   mass:
     latency_budget_ms: 50
     primary:
       class: edge_ai_mass.modules.mass.residual_estimator.ResidualMassEstimator
       params:
-        model_path: ${EDGE_AI_MASS_MODEL_PATH:artifacts/mass_estimation/mass-model-feature-residuals/models/best_model.joblib}
+        model_path: ${EDGE_AI_MASS_MODEL_PATH:models/weights/mass_residual_best_model.joblib}
         require_model: true
         clamp_nonnegative_mass: true
         default_pixel_to_m: ${EDGE_AI_PIXEL_TO_M:0.001}

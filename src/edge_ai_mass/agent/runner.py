@@ -813,6 +813,7 @@ class EdgeDeviceAgent:
 
                 self._apply_active_model_path_overrides()
                 pipeline = build_pipeline(self.config.runtime.pipeline_config)
+                self._attach_host_stage_providers(pipeline)
                 print("Loading inference pipeline...")
                 pipeline.load_all()
                 print("Inference pipeline loaded")
@@ -823,6 +824,34 @@ class EdgeDeviceAgent:
 
         print("Inference runner initialized")
         return self._inference_runner
+
+    def _attach_host_stage_providers(self, pipeline: Any) -> None:
+        """Attach host-primary providers that run only after local primary failure."""
+
+        settings = self.config.host_inference
+        if not settings.enabled:
+            return
+        from edge_ai_mass.host.provider import HostStageModule
+
+        for stage_name, stage in pipeline.stages.items():
+            if not settings.stage_enabled(stage_name):
+                continue
+            stage.host_provider = HostStageModule(
+                {
+                    "stage_name": stage_name,
+                    "endpoint_stage": settings.endpoint_stage(stage_name),
+                    "base_url": settings.resolved_base_url,
+                    "timeout_seconds": settings.request_timeout_seconds,
+                    "health_timeout_seconds": settings.health_timeout_seconds,
+                    "load_timeout_seconds": settings.load_timeout_seconds,
+                }
+            )
+            logger.info(
+                "Attached host inference provider for stage=%s endpoint_stage=%s base_url=%s",
+                stage_name,
+                settings.endpoint_stage(stage_name),
+                settings.resolved_base_url,
+            )
 
     def _preload_inference_runtime(self) -> None:
         if not self.config.runtime.preload_inference:

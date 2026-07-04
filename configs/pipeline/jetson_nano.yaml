@@ -54,10 +54,16 @@ stages:
       params:
         model_name: depth-anything/Depth-Anything-V2-Small-hf
         input_size: 256  # smaller input for Jetson
+        cache_dir: ${EDGE_AI_DEPTH_MODEL_CACHE_DIR:models/depth/huggingface}
+        debug_outputs: ${EDGE_AI_DEPTH_DEBUG_OUTPUTS:false}
+        debug_dir: ${EDGE_AI_DEPTH_DEBUG_DIR:models/debug/depth}
     fallback:
       class: edge_ai_mass.modules.depth.depth_anything.MiDaSDepthModule
       params:
         model_type: MiDaS_small
+        torch_hub_dir: ${EDGE_AI_TORCH_HUB_DIR:models/torch/hub}
+        debug_outputs: ${EDGE_AI_DEPTH_DEBUG_OUTPUTS:false}
+        debug_dir: ${EDGE_AI_DEPTH_DEBUG_DIR:models/debug/depth}
 
   mass:
     latency_budget_ms: 30
