@@ -37,6 +37,14 @@ models/weights/*.pt
 models/weights/*.onnx
 models/weights/*.engine
 models/weights/*.trt
+models/weights/*.joblib
+models/weights/*.pkl
+models/weights/*.ckpt
+models/depth/
+models/huggingface/
+models/torch/
+models/ultralytics/
+models/debug/
 !models/weights/.gitkeep
 
 # Logs and outputs
@@ -54,6 +62,10 @@ wandb/
 .DS_Store
 Thumbs.db
 
+*.png
+*.jpg
+*.jpeg
+*.pdf
 # Calibration images (keep configs only)
 data/calibration/images/
 !data/calibration/.gitkeep

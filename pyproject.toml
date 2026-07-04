@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "edge-ai-mass"
-version = "0.1.1"
+version = "0.1.3"
 description = "Edge AI system for waste object characterization and mass estimation"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -76,7 +76,11 @@ webrtc = [
 directml = [
     "torch-directml",
 ]
-all = ["edge-ai-mass[depth,dev,data,eval,tabular,mlops,orchestration,webrtc,directml]"]
+host = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+]
+all = ["edge-ai-mass[depth,dev,data,eval,tabular,mlops,orchestration,webrtc,directml,host]"]
 
 [project.scripts]
 edge-ai-mass = "edge_ai_mass.cli:main"
