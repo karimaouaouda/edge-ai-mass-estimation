@@ -62,7 +62,6 @@ wandb/
 .DS_Store
 Thumbs.db
 
-*.png
 *.jpg
 *.jpeg
 *.pdf
