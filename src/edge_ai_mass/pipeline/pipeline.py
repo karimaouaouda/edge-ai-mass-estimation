@@ -259,7 +259,8 @@ class Pipeline:
                         stage.host_available = True
                         host_loaded = True
                         logger.warning(
-                            "%s primary failed during load; host provider is ready: %s",
+                            "%s primary failed during load; host provider endpoint "
+                            "is reachable and will be tried before edge fallback: %s",
                             name,
                             exc,
                         )
@@ -370,6 +371,10 @@ class Pipeline:
             {
                 "latency_ms": float(depth_result.latency_ms),
                 "module": depth_result.metadata.get("source"),
+                "fallback_reason": depth_result.metadata.get("fallback_reason"),
+                "primary_error": depth_result.metadata.get("primary_error"),
+                "host_error": depth_result.metadata.get("host_error"),
+                "host_stage": depth_result.metadata.get("host_stage"),
             },
         )
 

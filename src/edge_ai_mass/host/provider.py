@@ -30,7 +30,16 @@ class HostStageModule(BaseModule):
         self._health: dict[str, Any] = {}
 
     def load(self) -> None:
-        self._health = self.client.stage_health(self.endpoint_stage, load=True)
+        # ``load`` means "the proxy can reach the host stage endpoint", not
+        # "eagerly load the remote model".  The edge fallback chain should be:
+        #
+        #   local primary -> host primary endpoint -> local fallback
+        #
+        # Asking the health endpoint to load/smoke-test the remote primary here
+        # can incorrectly mark the host as unavailable during edge preload,
+        # especially for large depth checkpoints.  The real POST endpoint still
+        # loads the host primary just-in-time before inference.
+        self._health = self.client.stage_health(self.endpoint_stage, load=False)
         if self._health.get("status") not in {"ok", "ready"}:
             raise RuntimeError(
                 f"Host stage {self.endpoint_stage!r} is not ready: {self._health}"
@@ -38,7 +47,17 @@ class HostStageModule(BaseModule):
         self._is_loaded = True
 
     def _forward(self, image: np.ndarray, **kwargs: Any) -> ModuleResult:
-        result = self.client.run_stage(self.endpoint_stage, image, kwargs=kwargs)
+        primary_loaded = bool(self._health.get("primary_loaded", False))
+        first_load_timeout = (
+            self.client.load_timeout_seconds if not primary_loaded else None
+        )
+        result = self.client.run_stage(
+            self.endpoint_stage,
+            image,
+            kwargs=kwargs,
+            timeout_seconds=first_load_timeout,
+        )
+        self._health["primary_loaded"] = True
         result.metadata.setdefault("host_stage", self.endpoint_stage)
         result.metadata.setdefault("host_base_url", self.client.base_url)
         return result

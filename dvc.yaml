@@ -9,7 +9,9 @@ stages:
       - src/edge_ai_mass/training
       - data/raw/taco
       - data/raw/aquatrash
-      - data/raw/RealWaste
-      - data/normalized/realwaste
+      - data/raw/trashnet
+      - data/raw/trashnet-segmentations
+      - data/raw/realwaste-main/RealWaste
+      - data/annotations/realwaste/annotations.json
     outs:
       - data/processed/waste_seg_yolo

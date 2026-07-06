@@ -30,6 +30,7 @@ from edge_ai_mass.training.publication import (
     restore_training_outputs,
 )
 from edge_ai_mass.training.state import PipelineState
+from edge_ai_mass.training.taxonomy import resolve_category
 from edge_ai_mass.training.tracking import normalize_uri
 from edge_ai_mass.training.visualization import create_dataset_visualizations
 from edge_ai_mass.training.yolo import (
@@ -148,10 +149,74 @@ def _realwaste_source(root: Path) -> dict:
     }
 
 
+def _trashnet_source(root: Path) -> dict:
+    """Model TrashNet raw images plus the separately uploaded COCO masks JSON."""
+    images_root = root / "trashnet" / "dataset-resized" / "trash"
+    images_root.mkdir(parents=True)
+    images = []
+    annotations = []
+    genuine_mask = [2, 3, 14, 4, 12, 13, 7, 11, 3, 8]
+    for index in range(4):
+        file_name = f"trash-{index}.jpg"
+        Image.new("RGB", (32, 24), color=(index * 20, 30, 50)).save(
+            images_root / file_name
+        )
+        images.append(
+            {
+                "id": index + 1,
+                # Kaggle can mount the raw dataset above dataset-resized; the
+                # configured source strips that prefix before resolving.
+                "file_name": f"dataset-resized/trash/{file_name}",
+                "width": 32,
+                "height": 24,
+            }
+        )
+        annotations.append(
+            {
+                "id": index + 1,
+                "image_id": index + 1,
+                "category_id": 1,
+                "bbox": [2, 3, 12, 10],
+                "segmentation": [genuine_mask],
+            }
+        )
+    annotations_dir = root / "trashnet-segmentations" / "annotations"
+    annotations_dir.mkdir(parents=True)
+    annotations_path = annotations_dir / "instances_default.json"
+    annotations_path.write_text(
+        json.dumps(
+            {
+                "images": images,
+                "annotations": annotations,
+                "categories": [{"id": 1, "name": "trash"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "name": "trashnet",
+        "annotations": str(annotations_path),
+        # Intentionally provide the parent mount, matching Kaggle usage.
+        "images": str(root / "trashnet"),
+        "images_root_candidates": ["dataset-resized", "."],
+        "file_name_fields": ["file_name", "source_file_name"],
+        "strip_path_prefixes": ["dataset-resized"],
+        "recursive_basename_fallback": True,
+        "resolver": "trashnet",
+        "unknown_category": "error",
+        "allow_bbox_fallback": False,
+        "box_polygon_policy": "drop_annotation",
+        "box_polygon_match": "full_image",
+        "box_polygon_tolerance_pixels": 2.0,
+        "keep_empty_images": False,
+    }
+
+
 def _config(tmp_path: Path) -> TrainingConfig:
     sources = [
         _source(tmp_path, "taco", "raw_a"),
         _source(tmp_path, "aquatrash", "raw_a"),
+        _trashnet_source(tmp_path),
         _realwaste_source(tmp_path),
     ]
     payload = {
@@ -177,20 +242,28 @@ def _config(tmp_path: Path) -> TrainingConfig:
     return TrainingConfig(payload, tmp_path / "config.yaml")
 
 
-def test_preprocessing_merges_three_coco_sources(tmp_path: Path):
+def test_preprocessing_merges_coco_sources_including_trashnet(tmp_path: Path):
     config = _config(tmp_path)
     manifest = build_yolo_dataset(config)
 
-    assert manifest["total_images"] == 12
-    assert manifest["total_instances"] == 12
-    assert set(manifest["sources"]) == {"taco", "aquatrash", "realwaste"}
+    assert manifest["total_images"] == 16
+    assert manifest["total_instances"] == 16
+    assert set(manifest["sources"]) == {"taco", "aquatrash", "trashnet", "realwaste"}
+    assert manifest["sources"]["trashnet"]["classes"] == {"mixed_waste": 4}
+    assert manifest["sources"]["trashnet"]["image_resolution"] == {
+        "prefix_stripped:file_name": 4
+    }
+    assert Path(manifest["sources"]["trashnet"]["images_root_resolved"]).name == (
+        "dataset-resized"
+    )
     assert manifest["sources"]["realwaste"]["classes"] == {"mixed_waste": 4}
     assert manifest["sources"]["realwaste"]["image_resolution"] == {
         "prefix_stripped:source_file_name": 4
     }
     assert Path(manifest["sources"]["realwaste"]["images_root_resolved"]).name == "RealWaste"
-    assert sum(item["images"] for item in manifest["splits"].values()) == 12
+    assert sum(item["images"] for item in manifest["splits"].values()) == 16
     assert (config.dataset_dir / "dataset.yaml").is_file()
+    assert (config.dataset_dir / manifest["clean_coco"]).is_file()
     label = next((config.dataset_dir / "labels" / "train").rglob("*.txt"))
     assert label.read_text(encoding="utf-8").startswith("0 ")
 
@@ -225,8 +298,8 @@ def test_realwaste_removes_box_polygon_annotations_and_their_images(tmp_path: Pa
     manifest = build_yolo_dataset(config)
     report = manifest["sources"]["realwaste"]
 
-    assert manifest["total_images"] == 11
-    assert manifest["total_instances"] == 11
+    assert manifest["total_images"] == 15
+    assert manifest["total_instances"] == 15
     assert report["images"] == 3
     assert report["instances"] == 3
     assert report["box_polygon_annotations"] == 1
@@ -237,6 +310,87 @@ def test_realwaste_removes_box_polygon_annotations_and_their_images(tmp_path: Pa
         (config.dataset_dir / "images").glob("*/realwaste/*")
     )
     assert len(materialized_realwaste) == 3
+
+
+def test_trashnet_removes_full_image_box_masks_and_empty_images(tmp_path: Path):
+    config = _config(tmp_path)
+    source = next(item for item in config.payload["data"]["sources"] if item["name"] == "trashnet")
+    annotations_path = Path(source["annotations"])
+    payload = json.loads(annotations_path.read_text(encoding="utf-8"))
+    full_image_box = [0, 0, 32, 0, 32, 24, 0, 24]
+    genuine_mask = [2, 3, 14, 4, 12, 13, 7, 11, 3, 8]
+    payload["annotations"] = [
+        {
+            "id": 1,
+            "image_id": 1,
+            "category_id": 1,
+            "bbox": [0, 0, 32, 24],
+            "segmentation": [full_image_box],
+        },
+        {
+            "id": 2,
+            "image_id": 1,
+            "category_id": 1,
+            "bbox": [2, 3, 12, 10],
+            "segmentation": [genuine_mask],
+        },
+        {
+            "id": 3,
+            "image_id": 2,
+            "category_id": 1,
+            "bbox": [0, 0, 32, 24],
+            "segmentation": [full_image_box],
+        },
+        # image 3 intentionally has no segmentation and must be removed.
+        {
+            "id": 4,
+            "image_id": 4,
+            "category_id": 1,
+            "bbox": [2, 3, 12, 10],
+            "segmentation": [genuine_mask],
+        },
+    ]
+    annotations_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    manifest = build_yolo_dataset(config)
+    report = manifest["sources"]["trashnet"]
+
+    assert manifest["total_images"] == 14
+    assert manifest["total_instances"] == 14
+    assert report["images"] == 2
+    assert report["instances"] == 2
+    assert report["box_polygon_policy"] == "drop_annotation"
+    assert report["box_polygon_match"] == "full_image"
+    assert report["box_polygon_annotations"] == 2
+    assert report["images_removed_box_polygons"] == 0
+    assert report["empty_images"] == 2
+    assert report["empty_images_removed"] == 2
+    assert report["classes"] == {"mixed_waste": 2}
+    materialized_trashnet = list((config.dataset_dir / "images").glob("*/trashnet/*"))
+    assert len(materialized_trashnet) == 2
+    clean_coco = json.loads(
+        (config.dataset_dir / manifest["clean_coco"]).read_text(encoding="utf-8")
+    )
+    clean_trashnet_images = [
+        image for image in clean_coco["images"] if image["source"] == "trashnet"
+    ]
+    assert {Path(image["source_name"]).name for image in clean_trashnet_images} == {
+        "trash-0.jpg",
+        "trash-3.jpg",
+    }
+    clean_trashnet_image_ids = {image["id"] for image in clean_trashnet_images}
+    assert sum(
+        annotation["image_id"] in clean_trashnet_image_ids
+        for annotation in clean_coco["annotations"]
+    ) == 2
+
+
+def test_trashnet_taxonomy_resolver_maps_source_labels_to_project_classes():
+    assert resolve_category({"name": "cardboard"}, resolver="trashnet") == "paper_cardboard"
+    assert resolve_category({"name": "paper"}, resolver="trashnet") == "paper_cardboard"
+    assert resolve_category({"name": "metal"}, resolver="trashnet") == "metal_can"
+    assert resolve_category({"name": "plastic"}, resolver="trashnet") == "rigid_plastic"
+    assert resolve_category({"name": "trash"}, resolver="trashnet") == "mixed_waste"
 
 
 def test_realwaste_failure_prints_bounded_structured_debug(tmp_path: Path, capsys):
@@ -262,7 +416,7 @@ def test_realwaste_failure_prints_bounded_structured_debug(tmp_path: Path, capsy
     assert '"event": "image.resolve.after"' in output
     assert '"event": "source.progress"' in output
     assert '"event": "quality.failed"' in output
-    assert output.count('"event": "image.resolve.before"') == 3
+    assert output.count('"event": "image.resolve.before"') == 4
 
 
 def test_plan_and_stage_aliases_do_not_start_training(tmp_path: Path):

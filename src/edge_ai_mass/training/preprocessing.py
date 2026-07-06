@@ -232,11 +232,32 @@ def _read_coco_source(
     image_label_field = source_cfg.get("category_from_image_field")
     unknown_policy = str(source_cfg.get("unknown_category", "error"))
     allow_bbox = bool(source_cfg.get("allow_bbox_fallback", False))
-    drop_images_with_box_polygons = bool(
-        source_cfg.get("drop_images_with_box_polygons", False)
-    )
+    legacy_drop_image_boxes = bool(source_cfg.get("drop_images_with_box_polygons", False))
+    box_polygon_policy = str(
+        source_cfg.get(
+            "box_polygon_policy",
+            "drop_image" if legacy_drop_image_boxes else "keep",
+        )
+    ).strip().lower()
+    if box_polygon_policy not in {"keep", "drop_annotation", "drop_image"}:
+        raise DatasetBuildError(
+            f"Source '{name}' has unsupported box_polygon_policy={box_polygon_policy!r}; "
+            "expected keep, drop_annotation, or drop_image"
+        )
+    box_polygon_match = str(source_cfg.get("box_polygon_match", "axis_aligned")).strip().lower()
+    if box_polygon_match not in {"axis_aligned", "full_image"}:
+        raise DatasetBuildError(
+            f"Source '{name}' has unsupported box_polygon_match={box_polygon_match!r}; "
+            "expected axis_aligned or full_image"
+        )
     box_polygon_tolerance = max(
         0.0, float(source_cfg.get("box_polygon_tolerance_pixels", 1.0))
+    )
+    keep_empty_images = bool(
+        source_cfg.get(
+            "keep_empty_images",
+            config.payload["data"].get("keep_empty_images", True),
+        )
     )
     task = config.payload["model"].get("task", "segment")
     multipart_policy = str(config.payload["data"].get("multipart_policy", "largest"))
@@ -279,8 +300,11 @@ def _read_coco_source(
         "unmapped_annotations": 0,
         "bbox_fallbacks": 0,
         "box_polygon_annotations": 0,
+        "box_polygon_policy": box_polygon_policy,
+        "box_polygon_match": box_polygon_match,
         "box_polygon_image_examples": [],
         "images_removed_box_polygons": 0,
+        "empty_images_removed": 0,
         "multipart_reduced": 0,
         "dimension_mismatches": 0,
         "image_resolution": Counter(),
@@ -410,22 +434,37 @@ def _read_coco_source(
                 polygons = _valid_polygons(
                     annotation_data.get("segmentation"), actual_width, actual_height
                 )
-                if drop_images_with_box_polygons:
+                if box_polygon_policy != "keep":
                     box_polygons = [
                         candidate
                         for candidate in polygons
-                        if _is_axis_aligned_box_polygon(
+                        if _matches_box_polygon(
                             candidate,
+                            actual_width,
+                            actual_height,
+                            match=box_polygon_match,
                             tolerance=box_polygon_tolerance,
                         )
                     ]
                     if box_polygons:
                         report["box_polygon_annotations"] += len(box_polygons)
-                        box_polygon_annotation_ids.append(annotation_data.get("id"))
-                        # Do not retain any part of an image containing a
-                        # box-derived pseudo-mask. Mixing its other annotations
-                        # into training would still keep the contaminated image.
-                        continue
+                        if box_polygon_policy == "drop_image":
+                            box_polygon_annotation_ids.append(annotation_data.get("id"))
+                            # Do not retain any part of an image containing a
+                            # box-derived pseudo-mask. Mixing its other annotations
+                            # into training would still keep the contaminated image.
+                            continue
+                        polygons = [
+                            candidate
+                            for candidate in polygons
+                            if not _matches_box_polygon(
+                                candidate,
+                                actual_width,
+                                actual_height,
+                                match=box_polygon_match,
+                                tolerance=box_polygon_tolerance,
+                            )
+                        ]
                 if polygons:
                     polygon = _select_polygon(polygons, multipart_policy)
                     if len(polygons) > 1:
@@ -469,7 +508,8 @@ def _read_coco_source(
 
         if not record.annotations:
             report["empty_images"] += 1
-            if not config.payload["data"].get("keep_empty_images", True):
+            if not keep_empty_images:
+                report["empty_images_removed"] += 1
                 continue
         report["instances"] += len(record.annotations)
         report["classes"].update(record_class_counts)
@@ -715,14 +755,7 @@ def _polygon_area(points: list[float]) -> float:
 
 def _is_axis_aligned_box_polygon(points: list[float], *, tolerance: float = 1.0) -> bool:
     """Return true for four-corner polygons generated from an axis-aligned box."""
-    vertices = list(zip(points[0::2], points[1::2]))
-    if len(vertices) > 1 and _points_close(vertices[0], vertices[-1], tolerance):
-        vertices.pop()
-
-    unique_vertices: list[tuple[float, float]] = []
-    for vertex in vertices:
-        if not any(_points_close(vertex, existing, tolerance) for existing in unique_vertices):
-            unique_vertices.append(vertex)
+    unique_vertices = _unique_polygon_vertices(points, tolerance=tolerance)
     if len(unique_vertices) != 4:
         return False
 
@@ -741,6 +774,92 @@ def _is_axis_aligned_box_polygon(points: list[float], *, tolerance: float = 1.0)
     }
     return all(
         any(_points_close(vertex, corner, tolerance) for vertex in unique_vertices)
+        for corner in expected_corners
+    )
+
+
+def _matches_box_polygon(
+    points: list[float],
+    width: int,
+    height: int,
+    *,
+    match: str,
+    tolerance: float = 1.0,
+) -> bool:
+    """Classify pseudo-mask polygons according to a source-specific policy.
+
+    ``axis_aligned`` is intentionally broad and is used for sources where any
+    rectangle-shaped segmentation is known to be synthetic. ``full_image`` is
+    stricter and targets annotation tools that emit a four-corner polygon around
+    the complete image when no real object mask was drawn.
+    """
+
+    if match == "axis_aligned":
+        return _is_axis_aligned_box_polygon(points, tolerance=tolerance)
+    if match == "full_image":
+        return _is_full_image_box_polygon(
+            points,
+            width=width,
+            height=height,
+            tolerance=tolerance,
+        )
+    raise DatasetBuildError(
+        f"Unsupported box polygon match mode: {match!r}; expected axis_aligned or full_image"
+    )
+
+
+def _is_full_image_box_polygon(
+    points: list[float],
+    *,
+    width: int,
+    height: int,
+    tolerance: float = 1.0,
+) -> bool:
+    """Return true when a polygon is the whole image boundary."""
+    if not _is_axis_aligned_box_polygon(points, tolerance=tolerance):
+        return False
+    unique_vertices = _unique_polygon_vertices(points, tolerance=tolerance)
+    expected_corners = {
+        (0.0, 0.0),
+        (float(width), 0.0),
+        (float(width), float(height)),
+        (0.0, float(height)),
+    }
+    alternate_expected_corners = {
+        (0.0, 0.0),
+        (max(float(width) - 1.0, 0.0), 0.0),
+        (max(float(width) - 1.0, 0.0), max(float(height) - 1.0, 0.0)),
+        (0.0, max(float(height) - 1.0, 0.0)),
+    }
+    return _vertices_match_corners(unique_vertices, expected_corners, tolerance) or (
+        _vertices_match_corners(unique_vertices, alternate_expected_corners, tolerance)
+    )
+
+
+def _unique_polygon_vertices(
+    points: list[float],
+    *,
+    tolerance: float,
+) -> list[tuple[float, float]]:
+    vertices = list(zip(points[0::2], points[1::2]))
+    if len(vertices) > 1 and _points_close(vertices[0], vertices[-1], tolerance):
+        vertices.pop()
+    unique_vertices: list[tuple[float, float]] = []
+    for vertex in vertices:
+        if not any(_points_close(vertex, existing, tolerance) for existing in unique_vertices):
+            unique_vertices.append(vertex)
+    return unique_vertices
+
+
+def _vertices_match_corners(
+    vertices: list[tuple[float, float]],
+    expected_corners: set[tuple[float, float]],
+    tolerance: float,
+) -> bool:
+    if len(vertices) != len(expected_corners):
+        return False
+    return all(
+        any(_points_close(vertex, corner, tolerance) for vertex in vertices)
         for corner in expected_corners
     )
 
@@ -765,6 +884,24 @@ def _select_polygon(polygons: list[list[float]], policy: str) -> list[float]:
 def _bbox_polygon(bbox: list[float]) -> list[float]:
     x, y, width, height = bbox
     return [x, y, x + width, y, x + width, y + height, x, y + height]
+
+
+def _bbox_from_polygon_points(points: list[float]) -> list[float]:
+    if not points:
+        return [0.0, 0.0, 0.0, 0.0]
+    xs = points[0::2]
+    ys = points[1::2]
+    min_x = min(xs)
+    max_x = max(xs)
+    min_y = min(ys)
+    max_y = max(ys)
+    return [min_x, min_y, max_x - min_x, max_y - min_y]
+
+
+def _bbox_area(bbox: list[float] | None) -> float:
+    if not bbox or len(bbox) != 4:
+        return 0.0
+    return max(float(bbox[2]), 0.0) * max(float(bbox[3]), 0.0)
 
 
 def _assign_splits(records: list[ImageRecord], split_cfg: dict[str, Any]) -> None:
@@ -824,8 +961,12 @@ def _materialize(
         for split in ("train", "val", "test"):
             (temp_dir / "images" / split).mkdir(parents=True, exist_ok=True)
             (temp_dir / "labels" / split).mkdir(parents=True, exist_ok=True)
+        (temp_dir / "annotations").mkdir(parents=True, exist_ok=True)
 
-        for record in records:
+        clean_coco_images: list[dict[str, Any]] = []
+        clean_coco_annotations: list[dict[str, Any]] = []
+        clean_annotation_id = 1
+        for clean_image_id, record in enumerate(records, start=1):
             safe_name = _safe_output_name(record)
             image_out = temp_dir / "images" / record.split / record.source / safe_name
             label_out = (
@@ -838,11 +979,62 @@ def _materialize(
             image_out.parent.mkdir(parents=True, exist_ok=True)
             label_out.parent.mkdir(parents=True, exist_ok=True)
             _link_or_copy(record.path, image_out, mode)
+            image_rel = image_out.relative_to(temp_dir).as_posix()
+            clean_coco_images.append(
+                {
+                    "id": clean_image_id,
+                    "file_name": image_rel,
+                    "width": record.width,
+                    "height": record.height,
+                    "source": record.source,
+                    "source_image_id": record.source_id,
+                    "source_name": record.source_name,
+                    "split": record.split,
+                }
+            )
             lines = [
                 _to_yolo(annotation, record, config.payload["model"]["task"])
                 for annotation in record.annotations
             ]
             label_out.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+            for annotation in record.annotations:
+                clean_coco_annotations.append(
+                    {
+                        "id": clean_annotation_id,
+                        "image_id": clean_image_id,
+                        "category_id": int(annotation.class_id) + 1,
+                        "bbox": (
+                            annotation.bbox
+                            if annotation.bbox is not None
+                            else _bbox_from_polygon_points(annotation.polygon or [])
+                        ),
+                        "segmentation": [annotation.polygon] if annotation.polygon else [],
+                        "area": (
+                            abs(_polygon_area(annotation.polygon))
+                            if annotation.polygon
+                            else _bbox_area(annotation.bbox)
+                        ),
+                        "iscrowd": 0,
+                    }
+                )
+                clean_annotation_id += 1
+
+        clean_coco = {
+            "info": {
+                "description": "Cleaned COCO segmentation dataset generated by edge-ai-mass",
+                "source_dataset_fingerprint_scope": "post-cleaning-pre-yolo",
+            },
+            "images": clean_coco_images,
+            "annotations": clean_coco_annotations,
+            "categories": [
+                {"id": index + 1, "name": label}
+                for index, label in enumerate(classes)
+            ],
+        }
+        (temp_dir / "annotations" / "instances_clean.json").write_text(
+            json.dumps(clean_coco, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
         for split in ("train", "val", "test"):
             split_records = [record for record in records if record.split == split]
@@ -872,6 +1064,7 @@ def _materialize(
             "task": config.payload["model"]["task"],
             "classes": classes,
             "dataset_yaml": "dataset.yaml",
+            "clean_coco": "annotations/instances_clean.json",
             "input_versions": input_versions,
             "sources": source_reports,
             "splits": split_reports,

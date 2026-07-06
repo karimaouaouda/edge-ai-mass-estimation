@@ -36,8 +36,9 @@ host_inference:
   base_url: ${EDGE_AI_HOST_INFERENCE_BASE_URL:}
   request_timeout_seconds: ${EDGE_AI_HOST_INFERENCE_TIMEOUT_SECONDS:15}
   health_timeout_seconds: ${EDGE_AI_HOST_INFERENCE_HEALTH_TIMEOUT_SECONDS:2}
-  # Used only when the host is asked to load and smoke-test a stage primary.
-  # Depth models can need this much time on first download/startup.
+  # Used for explicit host load/smoke-test requests and for the first hosted
+  # inference call when the health ping reports that the remote primary is not
+  # loaded yet. Depth models can need this much time on first download/startup.
   load_timeout_seconds: ${EDGE_AI_HOST_INFERENCE_LOAD_TIMEOUT_SECONDS:180}
   stages:
     detection:

@@ -9,6 +9,8 @@ Kaggle notebook
 ├── edge-ai-mass-module         # generated source/config archive
 ├── aquatrash                   # Images/ + annotations.csv
 ├── aquatrash-segmantations     # labels_final.json (existing slug has this typo)
+├── trashnet                    # raw dataset-resized/<trashnet-class>/...
+├── trashnet-segmentations      # annotations/instances_default.json
 ├── realwaste                   # raw realwaste-main/RealWaste/<original-class>/...
 └── segment-realwaste           # COCO annotations.json with project labels
 ```
@@ -177,7 +179,7 @@ Adding `src` to `sys.path` makes the project importable but does not install thi
 
 ## 3. Download TACO, then bind the mounted datasets
 
-Attach the AquaTrash inputs, raw RealWaste dataset, and RealWaste segmentation JSON through Kaggle. TACO is installed from the same Hugging Face JSON flow used by the earlier repository notebooks:
+Attach the AquaTrash inputs, raw TrashNet dataset, TrashNet segmentation JSON, raw RealWaste dataset, and RealWaste segmentation JSON through Kaggle. TACO is installed from the same Hugging Face JSON flow used by the earlier repository notebooks:
 
 ```python
 import os
@@ -202,6 +204,14 @@ os.environ["AQUATRASH_ANNOTATIONS"] = (
     "/kaggle/input/aquatrash-segmantations/labels_final.json"
 )
 
+# TrashNet raw images and its separately uploaded COCO segmentation dataset.
+# Raw dataset slug: feyzazkefe/trashnet
+# Segmentation dataset slug: karimaouaouda/trashnet-segmentations
+os.environ["TRASHNET_IMAGES"] = "/kaggle/input/trashnet"
+os.environ["TRASHNET_ANNOTATIONS"] = (
+    "/kaggle/input/trashnet-segmentations/annotations/instances_default.json"
+)
+
 # Raw images retain their original non-project class folders. They are used
 # only for path resolution; labels always come from the COCO JSON categories.
 os.environ["REALWASTE_IMAGES"] = (
@@ -213,6 +223,8 @@ os.environ["REALWASTE_ANNOTATIONS"] = "/kaggle/input/segment-realwaste/annotatio
 The downloader retrieves `https://huggingface.co/datasets/karimaouaouda/taco/resolve/main/annotations.json`, validates it as COCO JSON, validates downloaded images, writes files atomically, retries alternate URLs, and resumes existing valid images. Any missing image fails the job by default; set `TACO_MAX_DOWNLOAD_FAILURES` only when deliberately accepting a documented partial source. Internet must remain enabled in the Kaggle kernel.
 
 The existing Kaggle source slug is `aquatrash-segmantations` with the typo. If a corrected dataset is attached, use its actual mounted path instead. Keep AquaTrash images and `labels_final.json` separate; they come from different mounted datasets.
+
+TrashNet is configured as a cleaned segmentation source. `TRASHNET_IMAGES` may point either to `/kaggle/input/trashnet` or directly to its internal `dataset-resized` directory. `TRASHNET_ANNOTATIONS` must point to the COCO JSON from `karimaouaouda/trashnet-segmentations`. Preprocessing strips the optional `dataset-resized/` path prefix, resolves images recursively when needed, removes whole-image four-corner pseudo-mask annotations, and drops TrashNet images that have no genuine segmentation after cleaning.
 
 The kernel metadata attaches `joebeachcapital/realwaste` for the raw `realwaste-main/RealWaste` tree and `karimaouaouda/segment-realwaste` for the segmentation JSON. The JSON must be COCO-shaped, contain polygon `segmentation` values, and use only the eight configured project labels in `categories[].name`. The notebook validates this contract and rejects a legacy one-class `trash` JSON. `REALWASTE_IMAGES` may point to the dataset mount, `realwaste-main`, or `RealWaste`; preprocessing normalizes it to the internal image root. When `images[].source_file_name` contains `realwaste-main/RealWaste/<class>/<image>`, preprocessing strips the redundant prefix and locates the raw file without interpreting `<class>` as a label.
 
@@ -428,6 +440,8 @@ The repository `kernel-metadata.json` is already configured to update the existi
     "karimaouaouda/edge-ai-mass-module",
     "harshpanwar/aquatrash",
     "karimaouaouda/aqua_seg",
+    "feyzazkefe/trashnet",
+    "karimaouaouda/trashnet-segmentations",
     "joebeachcapital/realwaste"
   ],
   "kernel_sources": [
@@ -526,13 +540,13 @@ Use the same dataset contents, training config, study name, and run name. The pe
 For the first Kaggle run:
 
 ```text
-1. Attach the module, AquaTrash data/labels, raw RealWaste, and its segmentation JSON.
+1. Attach the module, AquaTrash data/labels, raw TrashNet, TrashNet segmentations, raw RealWaste, and its segmentation JSON.
 2. Import the package from the module dataset.
 3. Download TACO from its Hugging Face COCO JSON and bind environment paths.
 4. Construct TrainingPipeline with `/kaggle/working` overrides.
 5. Run plan("all") and resolve every blocking issue.
 6. Run preprocess.
-7. Inspect mosaics and dataset_manifest.json.
+7. Inspect mosaics, dataset_manifest.json, and annotations/instances_clean.json.
 8. Run tune.
 9. Run train,evaluate.
 10. Inspect curves and annotated predictions.

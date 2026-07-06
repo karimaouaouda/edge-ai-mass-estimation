@@ -61,6 +61,7 @@ class HostInferenceClient:
         image: np.ndarray,
         *,
         kwargs: dict[str, Any] | None = None,
+        timeout_seconds: float | None = None,
     ) -> ModuleResult:
         """Run one host stage and restore its ``ModuleResult``."""
 
@@ -69,7 +70,7 @@ class HostInferenceClient:
             "POST",
             f"/v1/stages/{stage_name}",
             payload=payload,
-            timeout=self.timeout_seconds,
+            timeout=self.timeout_seconds if timeout_seconds is None else timeout_seconds,
         )
         return module_result_from_payload(response)
 

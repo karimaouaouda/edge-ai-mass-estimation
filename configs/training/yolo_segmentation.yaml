@@ -76,6 +76,30 @@ data:
       unknown_category: error
       allow_bbox_fallback: false
 
+    - name: trashnet
+      enabled: ${TRASHNET_ENABLED:true}
+      required: true
+      # Raw Kaggle dataset: feyzazkefe/trashnet
+      # Expected internal image tree: dataset-resized/<trashnet-class>/*.jpg
+      images: ${TRASHNET_IMAGES:data/raw/trashnet}
+      images_root_candidates: [dataset-resized, .]
+      # Segmentation Kaggle dataset: karimaouaouda/trashnet-segmentations
+      # Expected file: annotations/instances_default.json
+      annotations: ${TRASHNET_ANNOTATIONS:data/raw/trashnet-segmentations/annotations/instances_default.json}
+      file_name_fields: [file_name, source_file_name]
+      strip_path_prefixes: [dataset-resized]
+      recursive_basename_fallback: true
+      resolver: trashnet
+      unknown_category: error
+      allow_bbox_fallback: false
+      # TrashNet segmentation exports may contain a four-corner polygon around
+      # the whole image when no true mask was drawn. Remove those annotations,
+      # then remove images that are left without any genuine segmentation.
+      box_polygon_policy: drop_annotation
+      box_polygon_match: full_image
+      box_polygon_tolerance_pixels: 2.0
+      keep_empty_images: false
+
     - name: realwaste
       required: true
       # The raw dataset keeps its original, non-project class folders under

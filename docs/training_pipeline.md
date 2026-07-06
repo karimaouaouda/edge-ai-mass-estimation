@@ -108,8 +108,9 @@ training:
     patience: 20
 ```
 
-For the staged workflow, keep a larger patience on the TACO + AquaTrash
-pretraining run and usually use a smaller value during RealWaste fine-tuning:
+For the staged workflow, keep a larger patience on the broad TACO + AquaTrash +
+TrashNet pretraining run and usually use a smaller value during the TrashNet +
+RealWaste fine-tuning run:
 
 ```bash
 edge-ai-mass train --stage detection \
@@ -218,7 +219,7 @@ Each configured source must provide:
 - polygon segmentations for a segmentation task, or `allow_bbox_fallback: true` when rectangular masks are intentionally acceptable;
 - a resolver or explicit `category_mapping` into `data.classes`.
 
-The default config merges TACO, AquaTrash, and RealWaste into the repository's eight-class taxonomy. RealWaste is supplied as two independent inputs: the untouched `realwaste-main/RealWaste/<original-class>/...` image tree and a COCO segmentation JSON whose category names are already project labels. Original RealWaste folder classes are never used as training labels. `source_file_name` is preferred for locating nested raw images, while `category_id -> categories[].name` remains the label authority. `REALWASTE_IMAGES` may point at the Kaggle dataset mount, `realwaste-main`, or the final `RealWaste` directory; preprocessing records both configured and resolved roots in the source report.
+The default config merges TACO, AquaTrash, TrashNet, and RealWaste into the repository's eight-class taxonomy. TrashNet is supplied as two independent Kaggle inputs: the raw `dataset-resized/<trashnet-class>/...` image tree from `feyzazkefe/trashnet` and the COCO segmentation JSON at `annotations/instances_default.json` from `karimaouaouda/trashnet-segmentations`. Its six coarse source labels are resolved through the dedicated `trashnet` resolver; full-image four-corner pseudo-mask annotations are removed, and images left without genuine polygon segmentations are dropped from the YOLO dataset. RealWaste is supplied as two independent inputs: the untouched `realwaste-main/RealWaste/<original-class>/...` image tree and a COCO segmentation JSON whose category names are already project labels. Original RealWaste folder classes are never used as training labels. `source_file_name` is preferred for locating nested raw images, while `category_id -> categories[].name` remains the label authority. `REALWASTE_IMAGES` may point at the Kaggle dataset mount, `realwaste-main`, or the final `RealWaste` directory; preprocessing records both configured and resolved roots in the source report.
 
 Dataset diagnostics are enabled by default and printed as one-line JSON records prefixed with `[dataset-debug]`. They cover build/source boundaries, path-root candidates, COCO counts/categories, bounded image-resolution traces, periodic progress, and every quality-gate input. Control verbosity with `DATA_DEBUG_ENABLED`, `DATA_DEBUG_SAMPLE_LIMIT`, `DATA_DEBUG_PROGRESS_EVERY`, and `DATA_DEBUG_ROOT_ENTRY_LIMIT`.
 
@@ -228,6 +229,7 @@ Preprocessing provides:
 - clipping and degenerate-polygon rejection;
 - deterministic, source-aware train/validation/test splits;
 - SHA-256 image fingerprints so exact duplicates cannot cross splits;
+- a post-cleaning COCO artifact at `annotations/instances_clean.json`;
 - collision-safe output names and portable YOLO YAML;
 - hard-link materialization locally, with copy fallback across filesystems;
 - `dataset_manifest.json` containing source annotation hashes, aggregate image hashes, class distributions, split counts, and the final dataset fingerprint.
@@ -241,6 +243,8 @@ COCO RLE masks are rejected rather than silently converted incorrectly. Convert 
 
 ```bash
 dvc add data/raw/aquatrash
+dvc add data/raw/trashnet
+dvc add data/raw/trashnet-segmentations
 dvc add data/raw/realwaste-main/RealWaste
 dvc add data/annotations/realwaste/annotations.json
 git add data/raw/*.dvc data/normalized/*.dvc .gitignore

@@ -9,6 +9,7 @@ import numpy as np
 
 from edge_ai_mass.agent.config import AgentConfig
 from edge_ai_mass.host.client import HostInferenceClient
+from edge_ai_mass.host.provider import HostStageModule
 from edge_ai_mass.host.serialization import (
     decode_value,
     module_result_from_payload,
@@ -17,7 +18,7 @@ from edge_ai_mass.host.serialization import (
 )
 from edge_ai_mass.host.server import prepare_host_model_environment
 from edge_ai_mass.modules.base import BaseModule, ModuleResult
-from edge_ai_mass.pipeline.pipeline import Detection, Stage
+from edge_ai_mass.pipeline.pipeline import Detection, Pipeline, Stage
 
 
 class FakeModule(BaseModule):
@@ -77,6 +78,76 @@ def test_stage_uses_edge_fallback_when_primary_and_host_fail():
     assert result.metadata["source"] == "mass.fallback"
     assert result.metadata["fallback_reason"] == "primary_error"
     assert "host predict failed" in result.metadata["host_error"]
+
+
+def test_failed_depth_load_keeps_host_primary_before_edge_fallback():
+    """A local load failure must not skip the host stage during inference."""
+
+    class FakeHostClient:
+        def __init__(self) -> None:
+            self.base_url = "http://host"
+            self.load_timeout_seconds = 180.0
+            self.health_load_flags: list[bool] = []
+            self.run_calls = 0
+            self.run_timeouts: list[float | None] = []
+
+        def stage_health(self, stage_name: str, *, load: bool = True) -> dict[str, Any]:
+            assert stage_name == "depth"
+            self.health_load_flags.append(load)
+            if load:
+                raise RuntimeError("remote eager load should not run during edge preload")
+            return {"status": "ok", "stage": stage_name, "primary_loaded": False}
+
+        def run_stage(
+            self,
+            stage_name: str,
+            image: np.ndarray,
+            *,
+            kwargs: dict[str, Any] | None = None,
+            timeout_seconds: float | None = None,
+        ) -> ModuleResult:
+            assert stage_name == "depth"
+            self.run_calls += 1
+            self.run_timeouts.append(timeout_seconds)
+            return ModuleResult(
+                data=np.ones(image.shape[:2], dtype=np.float32),
+                metadata={"module": "host-depth"},
+            )
+
+    host = HostStageModule(
+        {
+            "stage_name": "depth",
+            "endpoint_stage": "depth",
+            "base_url": "http://host",
+        }
+    )
+    fake_client = FakeHostClient()
+    host.client = fake_client  # type: ignore[assignment]
+
+    fallback = FakeModule(
+        name="fallback",
+        data=np.zeros((4, 4), dtype=np.float32),
+    )
+    stage = Stage(
+        "depth",
+        FakeModule(name="primary", fail_load=True),
+        fallback=fallback,
+        host_provider=host,
+    )
+    pipeline = Pipeline()
+    pipeline.add_stage("depth", stage)
+
+    pipeline.load_all()
+    result = stage.run(np.zeros((4, 4, 3), dtype=np.uint8))
+
+    assert fake_client.health_load_flags == [False]
+    assert fake_client.run_calls == 1
+    assert fake_client.run_timeouts == [180.0]
+    assert result.metadata["source"] == "depth.host_primary"
+    assert result.metadata["fallback_reason"] == "primary_unavailable"
+    assert result.metadata["primary_error"] == "primary load failed"
+    assert fallback.predict_calls == 0
+    assert stage.host_available is True
 
 
 def test_host_serialization_roundtrip_restores_detection_and_arrays():

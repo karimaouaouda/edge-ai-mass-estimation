@@ -106,6 +106,19 @@ DIRECT_ALIASES = {
 }
 
 
+TRASHNET_LABEL_MAP = {
+    # TrashNet's original taxonomy is image-level and coarse.  The annotated
+    # segmentation JSON keeps those category names, so this resolver maps them
+    # deliberately into the canonical project taxonomy used by YOLO training.
+    "cardboard": "paper_cardboard",
+    "glass": "glass",
+    "metal": "metal_can",
+    "paper": "paper_cardboard",
+    "plastic": "rigid_plastic",
+    "trash": "mixed_waste",
+}
+
+
 def resolve_taco_category(category: dict[str, Any]) -> str:
     """Map a TACO category into the canonical eight-class label space."""
     name = str(category.get("name", "")).strip()
@@ -150,6 +163,12 @@ def resolve_taco_category(category: dict[str, Any]) -> str:
     return "mixed_waste"
 
 
+def resolve_trashnet_category(category: dict[str, Any]) -> str | None:
+    """Map TrashNet's six source labels into the canonical training labels."""
+    name = str(category.get("name", "")).strip().casefold()
+    return TRASHNET_LABEL_MAP.get(name)
+
+
 def resolve_category(
     category: dict[str, Any],
     *,
@@ -164,6 +183,8 @@ def resolve_category(
         return mapping[label.casefold()]
     if resolver == "taco":
         return resolve_taco_category(category)
+    if resolver == "trashnet":
+        return resolve_trashnet_category(category)
     if resolver != "direct":
         raise ValueError(f"Unknown taxonomy resolver: {resolver}")
     return DIRECT_ALIASES.get(label.casefold())
