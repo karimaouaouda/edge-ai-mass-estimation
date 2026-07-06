@@ -282,6 +282,7 @@ def _run_stage(
                 primary_status,
                 validate_primary=validate_primary,
             )
+            logger.info("Running host primary stage '%s' with model: %s", stage_name, stage.primary.model_path)
             result = stage.primary.predict(image, **kwargs)
     except Exception as exc:
         logger.exception("Host stage inference failed: %s", stage_name)

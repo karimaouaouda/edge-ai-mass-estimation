@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from edge_ai_mass.agent.camera import CaptureAdapter
 from edge_ai_mass.agent.config import AgentConfig
+from edge_ai_mass.agent.console import print_panel, print_stage_update
 from edge_ai_mass.agent.envelopes import Envelope, new_envelope
 from edge_ai_mass.agent.firmware import FirmwareUpdateError, FirmwareUpdateManager
 from edge_ai_mass.agent.http_client import EdgeHttpClient
@@ -405,6 +406,7 @@ class EdgeDeviceAgent:
                 correlation_id=correlation_id,
                 request_id=request_id,
             ),
+            console=print_stage_update,
         )
         self._inference_busy = True
         self.send_telemetry(
@@ -413,7 +415,16 @@ class EdgeDeviceAgent:
             request_id=request_id,
         )
 
-        print(f"Received inference request: correlation_id={correlation_id} request_id={request_id}")
+        print_panel(
+            "Inference request",
+            {
+                "correlation_id": correlation_id,
+                "request_id": request_id,
+                "source_type": envelope.payload.get("source_type", "camera"),
+                "source_reference": envelope.payload.get("source_reference", "camera:0"),
+            },
+            status="received",
+        )
         try:
             runner = self._get_inference_runner()
             result = runner.run_command(
@@ -433,7 +444,15 @@ class EdgeDeviceAgent:
             )
         except Exception as exc:
             logger.exception("Inference command failed")
-            print(f"Inference command failed: {exc}")
+            print_panel(
+                "Inference command",
+                {
+                    "correlation_id": correlation_id,
+                    "request_id": request_id,
+                    "error": exc,
+                },
+                status="failed",
+            )
             stage_reporter.fail_active(exc)
             self.publish_event(
                 "inference.failed",
@@ -735,14 +754,22 @@ class EdgeDeviceAgent:
             )
         except Exception as exc:
             logger.exception("Automatic update check failed")
-            print(f"Automatic update check failed: {exc}")
+            print_panel(
+                "Automatic update check",
+                {"reason": reason, "error": exc},
+                status="failed",
+            )
             return
         finally:
             self._update_check_busy = False
 
         if getattr(result, "changed", False):
             logger.info("Automatic update installed: %s", getattr(result, "message", ""))
-            print(f"Automatic update installed: {getattr(result, 'message', '')}")
+            print_panel(
+                "Automatic update",
+                {"message": getattr(result, "message", "")},
+                status="installed",
+            )
             self._on_update_restart_requested()
             if self.http is not None or self.mqtt is not None:
                 self.send_telemetry(status="online")
@@ -814,15 +841,37 @@ class EdgeDeviceAgent:
                 self._apply_active_model_path_overrides()
                 pipeline = build_pipeline(self.config.runtime.pipeline_config)
                 self._attach_host_stage_providers(pipeline)
-                print("Loading inference pipeline...")
+                print_panel(
+                    "Inference runtime",
+                    {
+                        "pipeline_config": self.config.runtime.pipeline_config,
+                        "host_inference": self.config.host_inference.enabled,
+                        "active_models": self.active_models,
+                    },
+                    status="loading",
+                )
                 pipeline.load_all()
-                print("Inference pipeline loaded")
+                print_panel(
+                    "Inference runtime",
+                    {
+                        "pipeline_config": self.config.runtime.pipeline_config,
+                        "stage_count": len(getattr(pipeline, "stages", {})),
+                    },
+                    status="loaded",
+                )
                 self._inference_runner = InferenceRunner(
                     pipeline=pipeline,
                     active_models=self.active_models,
                 )
 
-        print("Inference runner initialized")
+        print_panel(
+            "Inference runner",
+            {
+                "initialized": True,
+                "active_models": self.active_models,
+            },
+            status="ready",
+        )
         return self._inference_runner
 
     def _attach_host_stage_providers(self, pipeline: Any) -> None:

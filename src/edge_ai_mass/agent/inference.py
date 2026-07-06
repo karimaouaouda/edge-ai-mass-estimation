@@ -9,6 +9,7 @@ from typing import Any, Callable
 import numpy as np
 
 from edge_ai_mass.agent.camera import CaptureAdapter, CapturedFrame
+from edge_ai_mass.agent.console import print_panel
 from edge_ai_mass.agent.envelopes import utc_now_iso
 from edge_ai_mass.pipeline.pipeline import (
     ObjectEstimate,
@@ -82,10 +83,12 @@ class InferenceStageReporter:
         request_id: str | None,
         correlation_id: str | None,
         publish: Callable[[dict[str, Any]], None],
+        console: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.request_id = request_id
         self.correlation_id = correlation_id
         self.publish = publish
+        self.console = console
         self._started_at: dict[str, str] = {}
         self._active_stage: str | None = None
         self._terminal_stages: set[str] = set()
@@ -126,6 +129,8 @@ class InferenceStageReporter:
             "metadata": dict(metadata or {}),
         }
         self.publish(payload)
+        if self.console is not None:
+            self.console(payload)
 
         if status == "running":
             self._active_stage = stage_key
@@ -186,13 +191,28 @@ class InferenceRunner:
                 {"source_type": source_type, "source_reference": source_reference},
             )
         try:
-            print(f"Capturing source for inference: type={source_type} reference={source_reference}")
+            print_panel(
+                "Capture source",
+                {
+                    "source_type": source_type,
+                    "source_reference": source_reference,
+                },
+                status="running",
+            )
             captured = self.capture_adapter.capture(
                 source_type=source_type,
                 source_reference=source_reference,
             )
         except Exception as exc:
-            print(f"Failed to capture source for inference: {exc}")
+            print_panel(
+                "Capture source",
+                {
+                    "source_type": source_type,
+                    "source_reference": source_reference,
+                    "error": exc,
+                },
+                status="failed",
+            )
             if stage_reporter is not None:
                 stage_reporter.fail_active(exc)
             raise
@@ -224,14 +244,22 @@ class InferenceRunner:
                 "running",
                 {"object_count": len(result.objects)},
             )
-        print(f"Normalizing pipeline result: {len(result.objects)} objects")
+        max_objects = _max_objects(options)
+        print_panel(
+            "Normalize pipeline result",
+            {
+                "object_count": len(result.objects),
+                "max_objects": max_objects or "unlimited",
+            },
+            status="running",
+        )
         try:
             normalized = normalize_pipeline_result(
                 result,
                 request_id=request_id,
                 correlation_id=correlation_id,
                 model_versions=self.active_models,
-                max_objects=_max_objects(options),
+                max_objects=max_objects,
             )
         except Exception as exc:
             if stage_reporter is not None:
