@@ -2,7 +2,7 @@
 # Run with: edge-ai-mass agent --config configs/agent/jetson_nano.yaml
 
 device:
-  id: ${EDGE_AI_DEVICE_ID:jetson-nano}
+  id: ${EDGE_AI_DEVICE_ID:jetson-1}
   name: ${EDGE_AI_DEVICE_NAME:Jetson Nano}
   type: jetson_nano
   firmware_version: ${EDGE_AI_FIRMWARE_VERSION:unknown}
@@ -17,7 +17,7 @@ device:
     mass: ${EDGE_AI_ACTIVE_MASS_VERSION:mass-v1}
 
 backend:
-  base_url: ${DROVENAI_BACKEND_URL:http://localhost:8000}
+  base_url: ${DROVENAI_BACKEND_URL:http://192.168.1.36:80}
   device_token_env: DROVENAI_DEVICE_TOKEN
   request_timeout_seconds: ${DROVENAI_BACKEND_TIMEOUT_SECONDS:10}
   max_retries: ${DROVENAI_BACKEND_MAX_RETRIES:3}
@@ -28,9 +28,9 @@ host_inference:
   # loads and tries its local primary first. If that primary fails, the agent
   # pings the matching host stage endpoint; if the host is healthy it runs that
   # host primary before using the local edge fallback.
-  enabled: ${EDGE_AI_HOST_INFERENCE_ENABLED:false}
+  enabled: ${EDGE_AI_HOST_INFERENCE_ENABLED:true}
   scheme: ${EDGE_AI_HOST_INFERENCE_SCHEME:http}
-  host: ${EDGE_AI_HOST_INFERENCE_HOST:127.0.0.1}
+  host: ${EDGE_AI_HOST_INFERENCE_HOST:192.168.1.36}
   port: ${EDGE_AI_HOST_INFERENCE_PORT:8090}
   # Optional full URL override, e.g. http://gpu-host.local:8090
   base_url: ${EDGE_AI_HOST_INFERENCE_BASE_URL:}
@@ -52,7 +52,7 @@ host_inference:
       endpoint_stage: mass
 
 mqtt:
-  host: ${DROVENAI_MQTT_HOST:127.0.0.1}
+  host: ${DROVENAI_MQTT_HOST:broker.emqx.io}
   port: ${DROVENAI_MQTT_PORT:1883}
   topic_prefix: ${MQTT_TOPIC_PREFIX:drovenai}
   username_env: DROVENAI_MQTT_USERNAME
