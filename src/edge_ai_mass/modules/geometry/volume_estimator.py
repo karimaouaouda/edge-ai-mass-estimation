@@ -137,10 +137,17 @@ class GeometryEstimator:
             valid &= _resize_bool_mask(valid_depth_mask, depth.shape)
         object_region = (mask > 0) & valid
         valid_pixel_count = int(np.sum(object_region))
-        if valid_pixel_count == 0:
+        has_valid_object_depth = valid_pixel_count > 0
+        if not has_valid_object_depth:
             warnings.append("no_valid_object_depth")
+            # Keep the mask support for area estimation, but remember that no
+            # real object-depth pixels were available.  Later we must not treat
+            # raw invalid zero-depth values as real object depths, otherwise a
+            # 1 m background becomes a fake 1 m object height.
             object_region = mask > 0
-            valid_pixel_count = pixel_count
+            support_pixel_count = pixel_count
+        else:
+            support_pixel_count = valid_pixel_count
 
         object_depth_values = depth[object_region]
         object_depth = float(np.median(object_depth_values[object_depth_values > 0])) if np.any(object_depth_values > 0) else 0.0
@@ -150,30 +157,35 @@ class GeometryEstimator:
 
         background = self._background_for(depth.shape)
         if background is None:
-            background_values = np.full(valid_pixel_count, object_depth + self.default_thickness_m)
+            background_values = np.full(support_pixel_count, object_depth + self.default_thickness_m)
             warnings.append("missing_background_depth")
             method = "mask_depth_default_thickness"
         else:
             background_values = background[object_region]
             background_values = background_values[np.isfinite(background_values) & (background_values > 0)]
             if background_values.size == 0:
-                background_values = np.full(valid_pixel_count, object_depth + self.default_thickness_m)
+                background_values = np.full(support_pixel_count, object_depth + self.default_thickness_m)
                 warnings.append("invalid_background_depth")
                 method = "mask_depth_default_thickness"
             else:
                 method = "mask_depth_background"
 
-        if background_values.size != valid_pixel_count:
+        if background_values.size != support_pixel_count:
             background_fill = float(np.median(background_values)) if background_values.size else object_depth
-            full_background = np.full(valid_pixel_count, background_fill, dtype=np.float32)
-            full_background[: min(valid_pixel_count, background_values.size)] = background_values[
-                : min(valid_pixel_count, background_values.size)
+            full_background = np.full(support_pixel_count, background_fill, dtype=np.float32)
+            full_background[: min(support_pixel_count, background_values.size)] = background_values[
+                : min(support_pixel_count, background_values.size)
             ]
             background_values = full_background
 
         object_values = depth[object_region].astype(np.float32)
         background_values = background_values.astype(np.float32)
-        heights = self._height_values(background_values, object_values)
+        if not has_valid_object_depth:
+            heights = np.full_like(background_values, self.default_thickness_m, dtype=np.float32)
+            method = "mask_default_thickness_no_object_depth"
+            warnings.append("using_default_thickness")
+        else:
+            heights = self._height_values(background_values, object_values)
         positive = heights > self.min_height_m
         if not np.any(positive):
             heights = np.full_like(object_values, self.default_thickness_m, dtype=np.float32)

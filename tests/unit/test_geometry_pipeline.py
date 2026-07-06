@@ -72,6 +72,26 @@ def test_geometry_estimator_integrates_background_volume():
     assert geometry.volume_m3 == pytest.approx(36 * 0.0001 * 0.2)
 
 
+def test_geometry_estimator_uses_default_thickness_when_object_depth_invalid():
+    depth = np.zeros((10, 10), dtype=np.float32)
+    estimator = GeometryEstimator(
+        calibration=_calibration(),
+        background_depth_m=1.0,
+        background_id="flat-bg",
+        default_thickness_m=0.01,
+    )
+
+    geometry = estimator.estimate(_detection(), depth, (10, 10, 3))
+
+    assert geometry.method == "mask_default_thickness_no_object_depth"
+    assert geometry.pixel_count == 36
+    assert geometry.valid_pixel_count == 0
+    assert geometry.mean_height_m == pytest.approx(0.01)
+    assert geometry.volume_m3 == pytest.approx(36 * 0.0001 * 0.01)
+    assert "no_valid_object_depth" in geometry.warnings
+    assert "using_default_thickness" in geometry.warnings
+
+
 def test_density_estimator_uses_geometry_volume_and_material_mapping():
     estimator = DensityMassEstimator(
         {
