@@ -32,6 +32,14 @@ from edge_ai_mass.modules.base import BaseModule, ModuleResult
 
 logger = logging.getLogger(__name__)
 
+DETECTION_CLASS_ALIASES = {
+    # Compatibility shim for a misspelled class name baked into an early
+    # detection checkpoint.  Keep the correction here, immediately after the
+    # detector output, so depth, geometry, mass, media labels, and backend
+    # payloads all see the canonical project taxonomy.
+    "plastic_battle": "plastic_bottle",
+}
+
 
 # ------------------------------------------------------------------
 # Data containers
@@ -313,6 +321,7 @@ class Pipeline:
             )
             raise
         detections: list[Detection] = det_result.data
+        class_corrections = normalize_detection_class_names(detections)
         latencies["detection"] = det_result.latency_ms
         _notify_stage(
             stage_callback,
@@ -327,6 +336,7 @@ class Pipeline:
                 "model_task": det_result.metadata.get("model_task"),
                 "fallback_reason": det_result.metadata.get("fallback_reason"),
                 "primary_error": det_result.metadata.get("primary_error"),
+                "class_name_corrections": class_corrections,
                 "latency_budget_exceeded": bool(
                     det_result.metadata.get("latency_budget_exceeded", False)
                 ),
@@ -475,6 +485,24 @@ def _notify_stage(
 ) -> None:
     if callback is not None:
         callback(PipelineStageUpdate(stage_key, status, metadata or {}))
+
+
+def normalize_detection_class_names(detections: list[Detection]) -> dict[str, int]:
+    """Canonicalize known detector class-name typos before downstream stages."""
+
+    corrections: dict[str, int] = {}
+    for detection in detections:
+        raw_name = str(detection.class_name).strip()
+        canonical = DETECTION_CLASS_ALIASES.get(raw_name)
+        if canonical is None:
+            canonical = DETECTION_CLASS_ALIASES.get(raw_name.lower())
+        if canonical is None or canonical == detection.class_name:
+            continue
+        corrections[f"{detection.class_name}->{canonical}"] = (
+            corrections.get(f"{detection.class_name}->{canonical}", 0) + 1
+        )
+        detection.class_name = canonical
+    return corrections
 
 
 def _crop(image: np.ndarray, bbox: np.ndarray) -> np.ndarray:

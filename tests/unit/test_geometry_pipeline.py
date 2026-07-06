@@ -104,6 +104,16 @@ class FakeDetector(BaseModule):
         return [_detection()]
 
 
+class FakeTypoDetector(BaseModule):
+    def load(self) -> None:
+        self._is_loaded = True
+
+    def _forward(self, image: np.ndarray, **kwargs):
+        detection = _detection()
+        detection.class_name = "plastic_battle"
+        return [detection]
+
+
 class FakeDepth(BaseModule):
     def load(self) -> None:
         self._is_loaded = True
@@ -155,6 +165,45 @@ def test_pipeline_runs_geometry_then_mass():
     assert obj.mass_method == "density"
     assert obj.geometry["background_id"] == "flat-bg"
     assert result.to_dict()["objects"][0]["geometry"]["volume_m3"] == pytest.approx(obj.volume_m3)
+
+
+def test_pipeline_normalizes_detection_class_typo_before_mass_stage():
+    pipeline = Pipeline()
+    pipeline.add_stage("detection", Stage("detection", FakeTypoDetector({})))
+    pipeline.add_stage("depth", Stage("depth", FakeDepth({})))
+    pipeline.add_stage(
+        "mass",
+        Stage(
+            "mass",
+            DensityMassEstimator(
+                {
+                    "densities": {"plastic": 10.0, "other": 1.0},
+                    "class_to_material": {"plastic_bottle": "plastic"},
+                }
+            ),
+        ),
+    )
+    pipeline.set_geometry_estimator(
+        GeometryEstimator(calibration=_calibration(), background_depth_m=1.0)
+    )
+    stage_updates = []
+
+    result = pipeline.run(
+        np.zeros((10, 10, 3), dtype=np.uint8),
+        stage_callback=stage_updates.append,
+    )
+
+    obj = result.objects[0]
+    assert obj.detection.class_name == "plastic_bottle"
+    assert obj.mass_kg == pytest.approx(obj.volume_m3 * 10.0)
+    detection_completed = [
+        update
+        for update in stage_updates
+        if update.stage_key == "object-detection" and update.status == "completed"
+    ][0]
+    assert detection_completed.metadata["class_name_corrections"] == {
+        "plastic_battle->plastic_bottle": 1
+    }
 
 
 def test_pipeline_load_all_disables_failed_primary_and_uses_fallback():

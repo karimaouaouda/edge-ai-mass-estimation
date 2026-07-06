@@ -136,6 +136,7 @@ def _stage_detail(metadata: Mapping[str, Any]) -> str:
         ("module", "src"),
         ("modules", "src"),
         ("fallback_reason", "reason"),
+        ("class_name_corrections", "class_fix"),
         ("primary_error", "primary_error"),
         ("host_error", "host_error"),
         ("host_stage", "host"),
